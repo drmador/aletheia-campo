@@ -1,6 +1,6 @@
-// Service worker: guarda la APP (no los datos) para que abra sin cobertura.
-// Al publicar una versión nueva, sube el número de VERSION.
-const VERSION = 'app-v1.1.0';
+// Service worker: guarda una copia de la APP (no de los datos) para que abra sin cobertura.
+// Con conexión siempre usa la versión más nueva publicada; sin conexión, la copia guardada.
+const VERSION = 'app-v1.2.0';
 const ARCHIVOS = [
   './', 'index.html', 'manifest.webmanifest', 'css/estilo.css',
   'js/app.js', 'js/config.js', 'js/almacen.js', 'js/auth.js', 'js/graph.js',
@@ -9,7 +9,7 @@ const ARCHIVOS = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(ARCHIVOS)));
+  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(ARCHIVOS.map((a) => new Request(a, { cache: 'reload' })))));
   self.skipWaiting();
 });
 
@@ -22,13 +22,22 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-  if (e.request.method !== 'GET' || url.origin !== location.origin) return; // OneDrive, Microsoft: nunca se guardan aquí
+  if (e.request.method !== 'GET' || url.origin !== location.origin) return; // OneDrive y Microsoft: nunca se guardan aquí
+  const navegacion = e.request.mode === 'navigate';
   e.respondWith((async () => {
     const c = await caches.open(VERSION);
-    // La página principal: siempre la de la caché (la vuelta de Microsoft lleva ?code=…)
-    const clave = e.request.mode === 'navigate' ? 'index.html' : e.request;
-    const guardada = await c.match(clave, { ignoreSearch: e.request.mode === 'navigate' });
-    if (guardada) return guardada;
-    return fetch(e.request);
+    // La página principal se guarda siempre como index.html (la vuelta de Microsoft lleva ?code=…)
+    const clave = navegacion ? new Request(new URL('index.html', self.registration.scope)) : new Request(url.origin + url.pathname);
+    try {
+      // 1.º Con conexión: la versión publicada más reciente (comprobando con GitHub, sin caché del navegador)
+      const r = await fetch(navegacion ? clave : e.request, { cache: 'no-cache' });
+      if (r.ok) { c.put(clave, r.clone()); return r; }
+      throw new Error('HTTP ' + r.status);
+    } catch {
+      // 2.º Sin conexión: la copia guardada
+      const guardada = await c.match(clave);
+      if (guardada) return guardada;
+      return new Response('Sin conexión', { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+    }
   })());
 });
