@@ -4,7 +4,7 @@
 export const CONFIG = {
   // Código que te da Microsoft al registrar la app (ver GUIA.md, paso 2).
   // Tiene esta forma: 1a2b3c4d-1111-2222-3333-444455556666
-  CLIENT_ID: 'PEGAR_AQUI_EL_ID_DE_CLIENTE',
+  CLIENT_ID: '2f124bce-d10b-43ef-9d3b-704c1e3b14b5',
 
   // Cuenta personal de Microsoft (Hotmail / Outlook.com).
   TENANT: 'consumers',
