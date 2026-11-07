@@ -52,15 +52,22 @@ export function claveEntrada(e) {
   return [limpiaTexto(e?.FECHA), limpiaTexto(e?.HORA), limpiaTexto(e?.TEXTO)].join('\u0001');
 }
 
+// ---------- Coordenadas GPS: "42.240612, -8.720700" (6 decimales, punto decimal) ----------
+export const formatoGPS = (lat, lon) => `${Number(lat).toFixed(6)}, ${Number(lon).toFixed(6)}`;
+export const esGPS = (s) => /^-?\d{1,2}\.\d{6}, -?\d{1,3}\.\d{6}$/.test(s || '');
+
 // Devuelve una entrada con el formato exacto del programa de Windows.
+// GPS solo se escribe si hay coordenadas válidas (las entradas sin GPS quedan como siempre).
 export function normalizarEntrada(e) {
-  return {
+  const out = {
     FECHA: limpiaTexto(e.FECHA),
     HORA: limpiaTexto(e.HORA),
     LUGAR: limpiaTexto(e.LUGAR),
-    TEXTO: limpiaTexto(e.TEXTO),
-    FOTOS: (e.FOTOS || []).map((f) => ({ ruta: f.ruta, pie: f.pie || '' })),
   };
+  if (esGPS(limpiaTexto(e.GPS))) out.GPS = limpiaTexto(e.GPS);
+  out.TEXTO = limpiaTexto(e.TEXTO);
+  out.FOTOS = (e.FOTOS || []).map((f) => ({ ruta: f.ruta, pie: f.pie || '' }));
+  return out;
 }
 
 /**

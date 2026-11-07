@@ -8,9 +8,9 @@ import { crearGraph } from './graph.js';
 import { crearOperaciones } from './operaciones.js';
 import * as L from './logica.js';
 import * as B from './bloqueo.js';
-import { h, vistaDatos, vistaVehiculos, vistaPropiedades, minimizar, CLAVES_FOTOS, NOMBRES_CAMPOS, lugarConMapa } from './vistas.js';
+import { h, vistaDatos, vistaVehiculos, vistaPropiedades, minimizar, CLAVES_FOTOS, NOMBRES_CAMPOS, lugarConMapa, linkMapa } from './vistas.js';
 
-const VERSION_APP = '1.1.0';
+const VERSION_APP = '1.3.0';
 const app = document.getElementById('app');
 const graph = crearGraph({ token: auth.token });
 
@@ -441,7 +441,9 @@ async function vistaHistorial(carpeta, valores) {
   const tarjeta = (e, { pendiente, error } = {}) => h('article', { class: 'tarjeta entrada' + (pendiente ? ' pendiente' : '') },
     h('div', { class: 'cab' }, h('span', {}, `${e.FECHA} · ${e.HORA}`),
       pendiente ? h('span', { class: 'etiqueta' + (error ? ' error' : '') }, error ? 'Error al subir' : 'Pendiente de subir') : null),
-    e.LUGAR ? h('div', { class: 'lugar' }, lugarConMapa(e.LUGAR)) : null,
+    // Con GPS, el mapa va a las coordenadas exactas; sin GPS, a la dirección escrita
+    e.GPS ? h('div', { class: 'lugar' }, e.LUGAR || 'GPS ' + e.GPS, ' ', linkMapa(e.GPS.replace(/\s/g, ''))) :
+      e.LUGAR ? h('div', { class: 'lugar' }, lugarConMapa(e.LUGAR)) : null,
     h('div', { class: 'texto' }, e.TEXTO || ''),
     error ? h('p', { class: 'sub' }, error) : null);
   const out = [h('button', { class: 'boton ancho', onclick: () => ir('nuevaEntrada', { carpeta }) }, '＋ Nueva entrada')];
@@ -494,7 +496,7 @@ function vistaPdf(carpeta) {
 async function ubicacionActual() {
   const pos = await new Promise((ok, mal) => navigator.geolocation.getCurrentPosition(ok, mal, { enableHighAccuracy: true, timeout: 20000, maximumAge: 30000 }));
   const { latitude: la, longitude: lo, accuracy } = pos.coords;
-  const coords = `${la.toFixed(5)}, ${lo.toFixed(5)}`;
+  const gps = L.formatoGPS(la, lo);
   const autom = (await kv.get('direccionAuto')) ?? true;
   if (autom && enLinea()) {
     try {
@@ -504,10 +506,10 @@ async function ubicacionActual() {
       const calle = [a.road || a.pedestrian || a.footway || a.square, a.house_number].filter(Boolean).join(' ');
       const sitio = a.city || a.town || a.village || a.municipality || a.county || '';
       const texto = [calle || a.neighbourhood || a.suburb, sitio].filter(Boolean).join(', ');
-      if (texto) return { texto, coords, accuracy };
-    } catch { /* sin dirección: se quedan las coordenadas */ }
+      if (texto) return { texto, gps, accuracy };
+    } catch { /* sin dirección: el lugar lo escribe el usuario */ }
   }
-  return { texto: `GPS ${coords}`, coords, accuracy };
+  return { texto: '', gps, accuracy };
 }
 
 function extension(file) {
@@ -524,6 +526,7 @@ vistas.nuevaEntrada = async ({ carpeta }) => {
   const hora = h('input', { inputMode: 'numeric', value: L.horaES(ahora), placeholder: 'hh:mm' });
   const lugar = h('input', { placeholder: 'Calle, número, localidad' });
   const notaGps = h('div', { class: 'sub' });
+  let gpsActual = null; // coordenadas de esta entrada (se guardan aparte, en GPS)
   const texto = h('textarea', { placeholder: 'Qué ha pasado…' });
   const rejilla = h('div', { class: 'rejilla grande' });
   const camara = h('input', { type: 'file', accept: 'image/*', capture: 'environment', hidden: true });
@@ -534,9 +537,14 @@ vistas.nuevaEntrada = async ({ carpeta }) => {
     notaGps.textContent = 'Buscando ubicación…';
     try {
       const u = await ubicacionActual();
-      if (!lugar.value.trim() || lugar.dataset.auto === '1') { lugar.value = u.texto; lugar.dataset.auto = '1'; }
-      notaGps.textContent = `Precisión aprox. ${Math.round(u.accuracy)} m · ${u.coords}. Puedes corregir la dirección.`;
+      gpsActual = u.gps;
+      if (u.texto && (!lugar.value.trim() || lugar.dataset.auto === '1')) { lugar.value = u.texto; lugar.dataset.auto = '1'; }
+      notaGps.replaceChildren(
+        `GPS: ${u.gps} (precisión aprox. ${Math.round(u.accuracy)} m). `,
+        u.texto ? 'Puedes corregir la dirección. ' : 'Escribe el lugar; las coordenadas se guardan aparte. ',
+        h('button', { type: 'button', class: 'enlace', onclick: () => { gpsActual = null; notaGps.textContent = 'Sin coordenadas GPS en esta entrada.'; } }, 'Quitar GPS'));
     } catch (e) {
+      gpsActual = null;
       notaGps.textContent = e.code === 1 ? 'Sin permiso de ubicación. Escribe el lugar a mano.' : 'No se pudo obtener la ubicación. Escribe el lugar a mano.';
     }
   };
@@ -571,7 +579,7 @@ vistas.nuevaEntrada = async ({ carpeta }) => {
       driveId: carpeta.driveId, carpetaId: carpeta.id, numero: carpeta.numero, investigado: carpeta.investigado,
       fichaId: cacheFicha?.fichaId || null,
       expNumero: String(cacheFicha?.obj?.valores?.EXP_NUMERO ?? '').trim() || null,
-      entrada: { FECHA: F, HORA: Hh, LUGAR: lugar.value.trim(), TEXTO: texto.value.trim() },
+      entrada: { FECHA: F, HORA: Hh, LUGAR: lugar.value.trim(), ...(gpsActual ? { GPS: gpsActual } : {}), TEXTO: texto.value.trim() },
       fotos: fotos.map((f) => ({ nombre: f.nombre, blob: f.blob, pie: f.pie.trim() })),
     });
     fotos.forEach((f) => URL.revokeObjectURL(f.url));
@@ -624,7 +632,7 @@ vistas.ajustes = async () => {
       huellaPosible ? interruptor('Abrir con huella', conHuella, (v) => (v ? B.activarHuella() : B.desactivarHuella())) : h('p', { class: 'sub' }, 'Este móvil no permite huella en apps web.')),
     h('section', { class: 'tarjeta' }, h('h3', {}, 'Ubicación'),
       interruptor('Convertir GPS en dirección', dirAuto, (v) => kv.set('direccionAuto', v),
-        'Usa OpenStreetMap: se envían solo las coordenadas, sin ningún dato del expediente. Si lo desactivas, se pondrán las coordenadas y tú escribes la dirección.')),
+        'Usa OpenStreetMap: se envían solo las coordenadas, sin ningún dato del expediente. Las coordenadas se guardan siempre aparte (dato GPS); si lo desactivas, tú escribes el lugar.')),
     h('section', { class: 'tarjeta' }, h('h3', {}, 'Cerrar sesión'),
       h('p', { class: 'sub' }, 'Borra del móvil todo lo guardado por la app (lista, fichas, PIN). No borra nada de OneDrive.'),
       h('button', { class: 'boton peligro ancho', onclick: cerrarSesion }, 'Cerrar sesión y borrar datos del móvil')),

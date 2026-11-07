@@ -121,7 +121,7 @@ export function crearOperaciones(graph, { ordenador, usuario }) {
       p.fase = 'registro';
       await guardarProgreso(p);
     }
-    const resumen = `${p.entrada.FECHA} ${p.entrada.HORA} · ${p.entrada.LUGAR || 'sin lugar'} · ${p.fotos.length} foto(s)`;
+    const resumen = `${p.entrada.FECHA} ${p.entrada.HORA} · ${p.entrada.LUGAR || (p.entrada.GPS ? 'GPS ' + p.entrada.GPS : 'sin lugar')} · ${p.fotos.length} foto(s)`;
     const acciones = [];
     for (const f of p.fotos) acciones.push(['Foto añadida', f.ruta]);
     acciones.push(p.añadida ? ['Historial: entrada añadida', resumen] : ['Historial: entrada ya existente (no se duplica)', resumen]);

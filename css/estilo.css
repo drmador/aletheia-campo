@@ -127,3 +127,4 @@ nav.pestanas button[aria-selected="true"] { background: var(--marca); color: #ff
 .titulo-item { margin: -2px 0 6px; font-weight: 600; }
 a.mapa { white-space: nowrap; color: var(--marca); font-weight: 600; }
 .entrada .lugar a.mapa { font-size: .85rem; }
+button.enlace { background: none; border: 0; padding: 0; font: inherit; color: var(--marca); font-weight: 600; text-decoration: underline; cursor: pointer; }
