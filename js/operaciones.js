@@ -6,7 +6,7 @@
 //   - registro de actividad: solo añadir líneas al final
 // ============================================================
 import {
-  leerFichaBytes, escribirFichaBytes, fusionarHistorial, comprobarFicha,
+  leerFichaBytes, añadirAlHistorialBytes, comprobarFicha,
   anexarRegistro, lineaRegistro, nombreRegistro, esNombreFicha,
   CARPETA_FOTOS_MOVIL, fechaES, horaSegES,
 } from './logica.js';
@@ -31,18 +31,22 @@ export function crearOperaciones(graph, { ordenador, usuario }) {
   }
 
   /**
-   * Añade entradas al historial sin pisar nada.
+   * Añade entradas al historial sin pisar nada: no reescribe la ficha, solo
+   * inserta las entradas nuevas en el texto original (ver añadirAlHistorialBytes).
    * Devuelve { añadidas, expNumero }: cuántas entradas se añadieron de verdad
    * (0 si ya estaban) y el EXP_NUMERO que tiene la ficha.
    */
   async function añadirAlHistorial(driveId, fichaId, entradas) {
     for (let i = 0; i < MAX_INTENTOS; i++) {
-      const { item, obj, estilo } = await leerFicha(driveId, fichaId);
-      const { ficha, añadidas } = fusionarHistorial(obj, entradas);
+      const item = await graph.item(driveId, fichaId);
+      const original = await graph.bytes(item);
+      const { obj } = leerFichaBytes(original);
+      comprobarFicha(obj);
+      const { bytes, añadidas } = añadirAlHistorialBytes(original, entradas);
       const expNumero = String(obj.valores.EXP_NUMERO ?? '').trim();
       if (añadidas === 0) return { añadidas: 0, expNumero };
       try {
-        await graph.reemplazarSiNoCambio(driveId, item.id, item.eTag, escribirFichaBytes(ficha, estilo), 'application/json');
+        await graph.reemplazarSiNoCambio(driveId, item.id, item.eTag, bytes, 'application/json');
         return { añadidas, expNumero };
       } catch (e) {
         // 412 = alguien (el PC) cambió la ficha entre la lectura y el guardado → repetir

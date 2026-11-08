@@ -10,7 +10,7 @@ import * as L from './logica.js';
 import * as B from './bloqueo.js';
 import { h, vistaDatos, vistaVehiculos, vistaPropiedades, minimizar, CLAVES_FOTOS, NOMBRES_CAMPOS, lugarConMapa, linkMapa } from './vistas.js';
 
-const VERSION_APP = '1.3.0';
+const VERSION_APP = '1.4.0';
 const app = document.getElementById('app');
 const graph = crearGraph({ token: auth.token });
 
