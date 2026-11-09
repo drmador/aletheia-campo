@@ -128,3 +128,19 @@ nav.pestanas button[aria-selected="true"] { background: var(--marca); color: #ff
 a.mapa { white-space: nowrap; color: var(--marca); font-weight: 600; }
 .entrada .lugar a.mapa { font-size: .85rem; }
 button.enlace { background: none; border: 0; padding: 0; font: inherit; color: var(--marca); font-weight: 600; text-decoration: underline; cursor: pointer; }
+
+/* ---- Notas de voz ---- */
+button.boton.grabar { background: #b3261e; color: #fff; }
+button.boton.grande { min-height: 64px; font-size: 1.15rem; }
+.grabando-indicador { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 18px 0 6px; font: 700 2.4rem system-ui; font-variant-numeric: tabular-nums; }
+.grabando-indicador .sub { font-size: 1rem; font-weight: 400; }
+.grabando-indicador .punto { width: 22px; height: 22px; border-radius: 99px; background: #e0241b; animation: latido 1s infinite; display: inline-flex; align-items: center; justify-content: center; font-size: .9rem; color: #fff; }
+.grabando-indicador.parado .punto { background: var(--ok); animation: none; width: 30px; height: 30px; }
+@keyframes latido { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .grabando-indicador .punto { animation: none; } }
+audio.audio { width: 100%; margin: 6px 0; }
+.nota-voz { font-style: italic; color: var(--suave); }
+.audio-caja { margin: 6px 0; }
+
+/* Lo oculto se oculta siempre, aunque otra regla le dé display */
+[hidden] { display: none !important; }

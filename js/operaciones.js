@@ -8,7 +8,7 @@
 import {
   leerFichaBytes, añadirAlHistorialBytes, comprobarFicha,
   anexarRegistro, lineaRegistro, nombreRegistro, esNombreFicha,
-  CARPETA_FOTOS_MOVIL, fechaES, horaSegES,
+  CARPETA_FOTOS_MOVIL, CARPETA_AUDIOS, nombreAlternativoAudio, fechaES, horaSegES,
 } from './logica.js';
 
 const MAX_INTENTOS = 6;
@@ -81,24 +81,36 @@ export function crearOperaciones(graph, { ordenador, usuario }) {
     throw new Error('No se pudo escribir el registro de actividad.');
   }
 
-  /** Sube una foto a Imagenes/Aportaciones sin sobrescribir nunca. Devuelve su ruta relativa. */
-  async function subirFoto(driveId, carpetaId, nombre, blob) {
+  /**
+   * Sube un archivo NUEVO a `carpeta` sin sobrescribir nunca. Si el nombre ya existe,
+   * prueba con `alternativo(nombre, 2)`, `(…, 3)`… Devuelve su ruta relativa.
+   */
+  async function subirArchivo(driveId, carpetaId, carpeta, nombre, blob, tipo, alternativo) {
     let n = nombre;
     for (let i = 0; i < MAX_INTENTOS; i++) {
-      const rel = `${CARPETA_FOTOS_MOVIL}/${n}`;
+      const rel = `${carpeta}/${n}`;
       try {
-        await graph.crearNuevo(driveId, carpetaId, rel, blob, blob.type || 'image/jpeg');
+        await graph.crearNuevo(driveId, carpetaId, rel, blob, tipo);
         return rel;
       } catch (e) {
         if (e.estado !== 409) throw e;
-        // Ya existe: si es la misma foto (subida en un intento anterior) vale; si no, otro nombre.
+        // Ya existe: si es el mismo archivo (subido en un intento anterior que se cortó) vale; si no, otro nombre.
         const ya = await graph.itemPorRuta(driveId, carpetaId, rel);
         if (ya && ya.size === blob.size) return rel;
-        n = nombre.replace(/(\.\w+)$/, `_${i + 2}$1`);
+        n = alternativo(nombre, i + 2);
       }
     }
-    throw new Error('No se pudo subir la foto ' + nombre);
+    throw new Error('No se pudo subir ' + nombre);
   }
+
+  /** Sube una foto a Imagenes/Aportaciones sin sobrescribir nunca. Devuelve su ruta relativa. */
+  const subirFoto = (driveId, carpetaId, nombre, blob) =>
+    subirArchivo(driveId, carpetaId, CARPETA_FOTOS_MOVIL, nombre, blob, blob.type || 'image/jpeg',
+      (n, k) => n.replace(/(\.\w+)$/, `_${k}$1`));
+
+  /** Sube una nota de voz a Audios sin sobrescribir nunca ("Nota … (2).m4a"). */
+  const subirAudio = (driveId, carpetaId, nombre, blob) =>
+    subirArchivo(driveId, carpetaId, CARPETA_AUDIOS, nombre, blob, (blob.type || 'audio/mp4').split(';')[0], nombreAlternativoAudio);
 
   /**
    * Procesa una entrada pendiente por fases. Tras cada fase guarda el progreso
@@ -111,6 +123,13 @@ export function crearOperaciones(graph, { ordenador, usuario }) {
       p.fichaId = f.id;
       await guardarProgreso(p);
     }
+    // 1.º el audio (para que el PC encuentre el archivo cuando vea la entrada)
+    if (p.audio && !p.audio.ruta) {
+      p.audio.ruta = await subirAudio(p.driveId, p.carpetaId, p.audio.nombre, p.audio.blob);
+      p.audio.blob = null; // ya está en OneDrive: se quita del móvil
+      await guardarProgreso(p);
+    }
+    // 2.º las fotos
     for (const foto of p.fotos) {
       if (foto.ruta) continue;
       foto.ruta = await subirFoto(p.driveId, p.carpetaId, foto.nombre, foto.blob);
@@ -118,7 +137,9 @@ export function crearOperaciones(graph, { ordenador, usuario }) {
       await guardarProgreso(p);
     }
     if (p.fase !== 'registro') {
+      // 3.º la entrada en la ficha
       const entrada = { ...p.entrada, FOTOS: p.fotos.map((f) => ({ ruta: f.ruta, pie: f.pie || '' })) };
+      if (p.audio) Object.assign(entrada, { AUDIO: p.audio.ruta, AUDIO_DURACION: p.audio.duracion });
       const r = await añadirAlHistorial(p.driveId, p.fichaId, [entrada]);
       p.añadida = r.añadidas;
       if (r.expNumero) p.expNumero = r.expNumero;
@@ -128,9 +149,14 @@ export function crearOperaciones(graph, { ordenador, usuario }) {
     const resumen = `${p.entrada.FECHA} ${p.entrada.HORA} · ${p.entrada.LUGAR || (p.entrada.GPS ? 'GPS ' + p.entrada.GPS : 'sin lugar')} · ${p.fotos.length} foto(s)`;
     const acciones = [];
     for (const f of p.fotos) acciones.push(['Foto añadida', f.ruta]);
-    acciones.push(p.añadida ? ['Historial: entrada añadida', resumen] : ['Historial: entrada ya existente (no se duplica)', resumen]);
+    if (p.audio) {
+      const archivo = p.audio.ruta.split('/').pop();
+      acciones.push(p.añadida ? ['Nota de voz grabada', archivo] : ['Nota de voz ya existente (no se duplica)', archivo]);
+    } else {
+      acciones.push(p.añadida ? ['Historial: entrada añadida', resumen] : ['Historial: entrada ya existente (no se duplica)', resumen]);
+    }
     await anotar(p.driveId, p.carpetaId, p.expNumero || p.numero, acciones);
   }
 
-  return { buscarFicha, leerFicha, añadirAlHistorial, anotar, subirFoto, procesarPendiente };
+  return { buscarFicha, leerFicha, añadirAlHistorial, anotar, subirFoto, subirAudio, procesarPendiente };
 }

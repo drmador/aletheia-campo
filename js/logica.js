@@ -8,6 +8,7 @@ export const RE_EXPEDIENTE = /^(\d+)\s*-\s*(EDP\d+)/i;
 export const CARPETA_FOTOS_MOVIL = 'Imagenes/Aportaciones';
 
 const nfc = (s) => (s ?? '').toString().normalize('NFC');
+const dos = (n) => String(n).padStart(2, '0');
 
 // "0440 - EDP0150 - Ana Ejemplo" -> {numero:'0440', edp:'EDP0150', investigado:'Ana Ejemplo'}
 export function leerNombreCarpeta(nombre) {
@@ -45,10 +46,14 @@ export function comprobarFicha(obj) {
   return obj;
 }
 
-const limpiaTexto = (t) => nfc(t).replace(/\r\n?/g, '\n').trim();
+export const limpiaTexto = (t) => nfc(t).replace(/\r\n?/g, '\n').trim();
 
 // Dos entradas son «la misma» si coinciden fecha, hora y texto.
+// Las notas de voz se distinguen por su audio (aunque se graben dos en el mismo minuto,
+// y aunque el PC ya la haya transcrito o dividido en varias entradas con el mismo AUDIO).
 export function claveEntrada(e) {
+  const audio = rutaRelativaLimpia(limpiaTexto(e?.AUDIO)).toLowerCase();
+  if (audio) return 'AUDIO\u0001' + audio;
   return [limpiaTexto(e?.FECHA), limpiaTexto(e?.HORA), limpiaTexto(e?.TEXTO)].join('\u0001');
 }
 
@@ -67,8 +72,35 @@ export function normalizarEntrada(e) {
   if (esGPS(limpiaTexto(e.GPS))) out.GPS = limpiaTexto(e.GPS);
   out.TEXTO = limpiaTexto(e.TEXTO);
   out.FOTOS = (e.FOTOS || []).map((f) => ({ ruta: f.ruta, pie: f.pie || '' }));
+  // Nota de voz: AUDIO, AUDIO_ESTADO ("pendiente"), AUDIO_DURACION (segundos, opcional), ordenador
+  if (limpiaTexto(e.AUDIO)) {
+    out.AUDIO = rutaRelativaLimpia(limpiaTexto(e.AUDIO));
+    out.AUDIO_ESTADO = 'pendiente';
+    const d = Number(e.AUDIO_DURACION);
+    if (Number.isFinite(d) && d > 0) out.AUDIO_DURACION = Math.round(d * 10) / 10;
+    out.ordenador = 'Móvil';
+  }
   return out;
 }
+
+// ---------- Notas de voz ----------
+export const CARPETA_AUDIOS = 'Audios';
+/** "Nota 2026-11-03 10-42-15.m4a" (fecha y hora de inicio, con segundos) */
+export function nombreNotaVoz(d, ext = 'm4a') {
+  return `Nota ${d.getFullYear()}-${dos(d.getMonth() + 1)}-${dos(d.getDate())} ${dos(d.getHours())}-${dos(d.getMinutes())}-${dos(d.getSeconds())}.${ext}`;
+}
+/** Nombre alternativo si ya existe: "Nota … (2).m4a", "(3)"… */
+export const nombreAlternativoAudio = (nombre, n) => nombre.replace(/(\.\w+)$/, ` (${n})$1`);
+/** Formato de grabación: M4A (AAC) si el móvil graba AAC de verdad; si no, WebM/Opus.
+ *  (No se usa «audio/mp4» a secas: algunos navegadores meten Opus dentro de un .m4a.) */
+export function elegirFormatoAudio(soporta) {
+  for (const [tipo, ext] of [['audio/mp4;codecs=mp4a.40.2', 'm4a'], ['audio/webm;codecs=opus', 'webm'], ['audio/webm', 'webm'], ['audio/ogg;codecs=opus', 'ogg']])
+    if (soporta(tipo)) return { tipo, ext };
+  return { tipo: '', ext: 'webm' };
+}
+/** Extensión según lo que el móvil ha grabado de verdad. */
+export const extensionAudio = (mime, porDefecto = 'webm') =>
+  /mp4a|aac/i.test(mime) ? 'm4a' : /webm/i.test(mime) ? 'webm' : /ogg/i.test(mime) ? 'ogg' : /mp4/i.test(mime) ? 'mp4' : porDefecto;
 
 /**
  * Añade al historial de `ficha` (la copia RECIÉN LEÍDA de OneDrive) solo las
@@ -302,7 +334,6 @@ export function añadirAlHistorialBytes(bytes, nuevas) {
 }
 
 // ---------- Fechas ----------
-const dos = (n) => String(n).padStart(2, '0');
 export const fechaES = (d = new Date()) => `${dos(d.getDate())}/${dos(d.getMonth() + 1)}/${d.getFullYear()}`;
 export const horaES = (d = new Date()) => `${dos(d.getHours())}:${dos(d.getMinutes())}`;
 export const horaSegES = (d = new Date()) => `${horaES(d)}:${dos(d.getSeconds())}`;

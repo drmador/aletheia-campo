@@ -10,7 +10,7 @@ import * as L from './logica.js';
 import * as B from './bloqueo.js';
 import { h, vistaDatos, vistaVehiculos, vistaPropiedades, minimizar, CLAVES_FOTOS, NOMBRES_CAMPOS, lugarConMapa, linkMapa } from './vistas.js';
 
-const VERSION_APP = '1.4.0';
+const VERSION_APP = '1.5.0';
 const app = document.getElementById('app');
 const graph = crearGraph({ token: auth.token });
 
@@ -216,6 +216,8 @@ document.addEventListener('visibilitychange', () => {
 async function trasDesbloquear() {
   desbloqueada = true;
   navigator.storage?.persist?.().catch(() => {}); // que Android no borre las entradas pendientes
+  // Notas de voz que se quedaron «en edición» (p. ej. Android cerró la app en la cámara): ya se pueden subir
+  for (const p of await pendientes.todos()) if (p.esperando) await pendientes.guardar({ ...p, esperando: false });
   const raiz = await kv.get('raiz');
   ir(raiz ? 'directorio' : 'elegirRaiz', {}, { reemplazar: true });
   sincronizar();
@@ -238,7 +240,8 @@ async function obtenerOps() {
 async function sincronizar() {
   if (sincronizando || !enLinea() || !desbloqueada) return;
   sincronizando = true; // se marca ANTES de esperar nada: así nunca hay dos subidas a la vez
-  const lista = (await pendientes.todos()).sort((a, b) => a.creado - b.creado);
+  // Las notas de voz que el detective aún está completando (lugar, fotos) esperan a que pulse «Listo»
+  const lista = (await pendientes.todos()).filter((p) => !p.esperando).sort((a, b) => a.creado - b.creado);
   if (!lista.length) { sincronizando = false; return actualizarChip(); }
   actualizarChip();
   let subidas = 0;
@@ -444,12 +447,16 @@ async function vistaHistorial(carpeta, valores) {
     // Con GPS, el mapa va a las coordenadas exactas; sin GPS, a la dirección escrita
     e.GPS ? h('div', { class: 'lugar' }, e.LUGAR || 'GPS ' + e.GPS, ' ', linkMapa(e.GPS.replace(/\s/g, ''))) :
       e.LUGAR ? h('div', { class: 'lugar' }, lugarConMapa(e.LUGAR)) : null,
-    h('div', { class: 'texto' }, e.TEXTO || ''),
+    e.AUDIO && (L.limpiaTexto(e.AUDIO_ESTADO) === 'pendiente' || !L.limpiaTexto(e.TEXTO))
+      ? h('div', { class: 'texto nota-voz' }, '🎙 Nota de voz pendiente de transcribir', e.AUDIO_DURACION ? h('span', { class: 'sub' }, ' · ' + duracionTexto(e.AUDIO_DURACION)) : null)
+      : h('div', { class: 'texto' }, e.TEXTO || ''),
     error ? h('p', { class: 'sub' }, error) : null);
-  const out = [h('button', { class: 'boton ancho', onclick: () => ir('nuevaEntrada', { carpeta }) }, '＋ Nueva entrada')];
-  out.push(h('p'));
+  const out = [h('div', { class: 'botones' },
+    h('button', { class: 'boton', onclick: () => ir('nuevaEntrada', { carpeta }) }, '＋ Nueva entrada'),
+    h('button', { class: 'boton grabar', onclick: () => ir('notaVoz', { carpeta }) }, '🎙 Nota de voz'))];
   for (const p of pend) {
-    const t = tarjeta(p.entrada, { pendiente: true, error: p.error });
+    const t = tarjeta(p.audio ? { ...p.entrada, AUDIO: p.audio.nombre, AUDIO_ESTADO: 'pendiente', AUDIO_DURACION: p.audio.duracion } : p.entrada, { pendiente: true, error: p.error });
+    if (p.audio?.blob) t.append(h('audio', { controls: true, preload: 'metadata', src: URL.createObjectURL(p.audio.blob), class: 'audio' }));
     const locales = p.fotos.filter((f) => f.blob);
     if (locales.length) t.append(h('div', { class: 'rejilla' }, locales.map((f) => {
       const url = URL.createObjectURL(f.blob);
@@ -459,11 +466,31 @@ async function vistaHistorial(carpeta, valores) {
   }
   for (const e of hist) {
     const t = tarjeta(e);
+    if (e.AUDIO) t.append(reproductorOneDrive(carpeta, e.AUDIO));
     if (Array.isArray(e.FOTOS) && e.FOTOS.length) t.append(rejillaFotos(carpeta, e.FOTOS));
     out.push(t);
   }
   if (!pend.length && !hist.length) out.push(h('p', { class: 'vacio' }, valores ? 'El historial está vacío.' : 'Historial no disponible todavía.'));
   return out;
+}
+
+const duracionTexto = (seg) => { const s = Math.round(Number(seg) || 0); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+
+/** Botón «Escuchar» para una nota de voz que ya está en OneDrive (se descarga solo al pulsar). */
+function reproductorOneDrive(carpeta, ruta) {
+  const caja = h('div', { class: 'audio-caja' });
+  const boton = h('button', { class: 'boton sec', type: 'button', onclick: async () => {
+    if (!enLinea()) { boton.textContent = 'Sin conexión para escuchar'; return; }
+    boton.disabled = true; boton.textContent = 'Cargando…';
+    try {
+      const it = await graph.itemPorRuta(carpeta.driveId, carpeta.id, L.rutaRelativaLimpia(ruta));
+      if (!it?.['@microsoft.graph.downloadUrl']) throw new Error('No se encuentra el audio: ' + ruta);
+      const a = h('audio', { controls: true, autoplay: true, src: it['@microsoft.graph.downloadUrl'], class: 'audio' });
+      caja.replaceChildren(a);
+    } catch (e) { boton.disabled = false; boton.textContent = e.message; }
+  } }, '▶ Escuchar nota de voz');
+  caja.append(boton);
+  return caja;
 }
 
 function vistaPdf(carpeta) {
@@ -602,6 +629,158 @@ vistas.nuevaEntrada = async ({ carpeta }) => {
     guardar,
     h('p', { class: 'sub' }, enLinea() ? 'Se subirá a OneDrive al guardar.' : 'Sin conexión: se guarda en el móvil y se subirá sola cuando vuelva la cobertura.'));
   gps();
+};
+
+// ---------------------------------------------------------------- nota de voz
+// Graba SOLO mientras esta pantalla está delante y el detective no pulsa «Parar».
+// No transcribe nada: el audio va tal cual a OneDrive y lo transcribe el PC sin internet.
+const MAX_SEGUNDOS_NOTA = 300;
+
+vistas.notaVoz = async ({ carpeta }) => {
+  const inicio = new Date();
+  const fotos = [];
+  let gpsActual = null, grabador = null, flujo = null, wake = null, reloj = null, partes = [];
+  let estadoNota = 'preparando'; // preparando → grabando → guardando → guardada
+  let registro = null;           // la nota ya guardada en el móvil (se va completando)
+
+  const main = pantalla('Nota de voz', { atras: true });
+  const indicador = h('div', { class: 'grabando-indicador', 'aria-live': 'polite' }, h('span', { class: 'punto' }), h('span', { class: 'tiempo' }, '0:00'), h('span', { class: 'sub' }, ' / 5:00'));
+  const aviso = h('p', { class: 'sub centro' }, 'Preparando el micrófono…');
+  const parar = h('button', { class: 'boton peligro ancho grande', type: 'button', disabled: true }, '■ Parar y guardar');
+  const lugar = h('input', { placeholder: 'Calle, número, localidad' });
+  const notaGps = h('div', { class: 'sub' }, 'Buscando ubicación…');
+  const zonaFin = h('div', { hidden: true });
+  const cab = h('p', { class: 'sub' }, `${L.fechaES(inicio)} · ${L.horaES(inicio)} (hora de inicio)`);
+  main.append(cab, indicador, aviso, parar, h('p'), h('label', {}, 'Lugar'), lugar, notaGps, zonaFin);
+
+  // Ubicación (misma lógica que las entradas normales), en paralelo a la grabación
+  ubicacionActual().then((u) => {
+    gpsActual = u.gps;
+    if (u.texto && !lugar.value.trim()) lugar.value = u.texto;
+    notaGps.replaceChildren(`GPS: ${u.gps} (precisión aprox. ${Math.round(u.accuracy)} m). `,
+      h('button', { type: 'button', class: 'enlace', onclick: () => { gpsActual = null; notaGps.textContent = 'Sin coordenadas GPS en esta nota.'; guardarCambios(); } }, 'Quitar GPS'));
+    guardarCambios();
+  }).catch((e) => { notaGps.textContent = e?.code === 1 ? 'Sin permiso de ubicación. Escribe el lugar a mano.' : 'No se pudo obtener la ubicación. Escribe el lugar a mano.'; });
+  lugar.addEventListener('change', () => guardarCambios());
+
+  const segundos = () => (Date.now() - inicio.getTime()) / 1000;
+  const liberar = () => {
+    clearInterval(reloj);
+    flujo?.getTracks().forEach((t) => t.stop()); // apaga el micrófono
+    wake?.release?.().catch(() => {});
+    document.removeEventListener('visibilitychange', alOcultar);
+  };
+  const alOcultar = () => { if (document.hidden && estadoNota === 'grabando') detener('La grabación se paró porque la app pasó a segundo plano. Lo grabado está guardado.'); };
+
+  async function guardarCambios() {
+    if (!registro) return;
+    registro.entrada.LUGAR = lugar.value.trim();
+    if (gpsActual) registro.entrada.GPS = gpsActual; else delete registro.entrada.GPS;
+    registro.fotos = fotos.map((f) => ({ nombre: f.nombre, blob: f.blob, pie: (f.pie || '').trim() }));
+    await pendientes.guardar(registro);
+  }
+
+  function detener(motivo) {
+    if (estadoNota !== 'grabando') return;
+    estadoNota = 'guardando';
+    parar.disabled = true;
+    aviso.textContent = 'Guardando…';
+    if (motivo) estado(main, motivo, 'aviso');
+    grabador.stop();
+  }
+
+  async function alParar() {
+    liberar();
+    const duracion = Math.round(segundos() * 10) / 10;
+    const mime = grabador.mimeType || formato.tipo || 'audio/webm';
+    const blob = new Blob(partes, { type: mime.split(';')[0] });
+    if (!blob.size) { estadoNota = 'guardada'; aviso.textContent = 'No se grabó nada.'; estado(main, 'El micrófono no envió sonido. No se ha guardado ninguna nota.', 'error'); return; }
+    const cacheFicha = await cache.get('ficha:' + carpeta.id);
+    registro = {
+      id: crypto.randomUUID(), creado: Date.now(), fase: 'fotos', esperando: true,
+      driveId: carpeta.driveId, carpetaId: carpeta.id, numero: carpeta.numero, investigado: carpeta.investigado,
+      fichaId: cacheFicha?.fichaId || null,
+      expNumero: String(cacheFicha?.obj?.valores?.EXP_NUMERO ?? '').trim() || null,
+      entrada: { FECHA: L.fechaES(inicio), HORA: L.horaES(inicio), LUGAR: '', TEXTO: '' },
+      audio: { nombre: L.nombreNotaVoz(inicio, L.extensionAudio(mime, formato.ext)), blob, duracion },
+      fotos: [],
+    };
+    await guardarCambios(); // ya está a salvo en el móvil
+    estadoNota = 'guardada';
+    indicador.classList.add('parado');
+    indicador.querySelector('.punto').textContent = '✓';
+    aviso.textContent = `Nota guardada (${duracionTexto(duracion)}). Se subirá a OneDrive y el PC la transcribirá.`;
+    parar.hidden = true;
+    pintarFin(blob);
+  }
+
+  // Tras parar: escuchar, corregir el lugar y (si se quiere) añadir fotos a la misma entrada
+  function pintarFin(blob) {
+    const rejilla = h('div', { class: 'rejilla grande' });
+    const camara = h('input', { type: 'file', accept: 'image/*', capture: 'environment', hidden: true });
+    const galeria = h('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true });
+    const pintar = () => rejilla.replaceChildren(...fotos.map((f, i) => h('div', {},
+      h('div', { class: 'mini' }, h('img', { src: f.url, alt: '' }),
+        h('button', { class: 'quitar', type: 'button', 'aria-label': 'Quitar foto', onclick: () => { URL.revokeObjectURL(f.url); fotos.splice(i, 1); pintar(); guardarCambios(); } }, '✕')),
+      h('input', { placeholder: 'Pie (opcional)', value: f.pie, oninput: (e) => { f.pie = e.target.value; }, onchange: () => guardarCambios() }))));
+    const añadir = (lista) => {
+      for (const file of lista) fotos.push({ nombre: L.nombreFotoMovil(new Date()).replace(/\.jpg$/, '.' + extension(file)), blob: file, pie: '', url: URL.createObjectURL(file) });
+      pintar(); guardarCambios();
+    };
+    camara.addEventListener('change', () => { añadir(camara.files); camara.value = ''; });
+    galeria.addEventListener('change', () => { añadir(galeria.files); galeria.value = ''; });
+    zonaFin.hidden = false;
+    zonaFin.replaceChildren(
+      h('p'), h('label', {}, 'Escuchar'), h('audio', { controls: true, src: URL.createObjectURL(blob), class: 'audio' }),
+      h('p'), h('label', {}, 'Fotos de esta nota (opcional)'),
+      h('div', { class: 'botones' },
+        h('button', { class: 'boton sec', type: 'button', onclick: () => camara.click() }, '📷 Cámara'),
+        h('button', { class: 'boton sec', type: 'button', onclick: () => galeria.click() }, '🖼 Galería')),
+      camara, galeria, rejilla, h('p'),
+      h('button', { class: 'boton ancho', type: 'button', onclick: () => history.back() }, 'Listo'));
+  }
+
+  // Al salir de la pantalla: si está grabando, para y guarda; si ya está guardada, se libera para subir
+  antesDeSalir = () => {
+    if (estadoNota === 'grabando') { detener(); return false; }
+    if (estadoNota === 'guardando') return false;
+    liberar();
+    if (registro) {
+      guardarCambios().then(() => pendientes.guardar({ ...registro, esperando: false })).then(() => setTimeout(sincronizar, 300));
+    }
+    return true;
+  };
+
+  // --- empezar a grabar (solo porque el detective ha pulsado «Nota de voz»)
+  const formato = L.elegirFormatoAudio((t) => !!window.MediaRecorder?.isTypeSupported?.(t));
+  try {
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) throw new Error('Este móvil no permite grabar audio desde la app.');
+    flujo = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    if (estadoNota !== 'preparando' || !document.body.contains(main)) { liberar(); return; } // el detective ya se fue
+    grabador = new MediaRecorder(flujo, { ...(formato.tipo ? { mimeType: formato.tipo } : {}), audioBitsPerSecond: 48000 });
+  } catch (e) {
+    liberar();
+    estadoNota = 'guardada';
+    aviso.textContent = '';
+    indicador.hidden = true;
+    estado(main, e.name === 'NotAllowedError' ? 'Sin permiso para usar el micrófono. Actívalo en los ajustes del móvil (Chrome → Configuración de sitios → Micrófono).' : 'No se pudo usar el micrófono: ' + e.message, 'error');
+    return;
+  }
+  grabador.ondataavailable = (ev) => { if (ev.data?.size) partes.push(ev.data); };
+  grabador.onstop = () => { alParar().catch((e) => estado(main, 'Error al guardar la nota: ' + e.message, 'error')); };
+  grabador.start(1000); // trozos de 1 s: si algo falla, lo grabado hasta ahí no se pierde
+  estadoNota = 'grabando';
+  try { wake = await navigator.wakeLock?.request('screen'); } catch { /* sin bloqueo de pantalla */ }
+  document.addEventListener('visibilitychange', alOcultar);
+  aviso.textContent = 'Grabando. Pulsa «Parar» al terminar.';
+  parar.disabled = false;
+  parar.onclick = () => detener();
+  const tiempo = indicador.querySelector('.tiempo');
+  reloj = setInterval(() => {
+    const s = segundos();
+    tiempo.textContent = duracionTexto(Math.floor(s));
+    if (s >= MAX_SEGUNDOS_NOTA) detener('Se ha llegado al límite de 5 minutos. Para seguir, graba otra nota.');
+  }, 250);
 };
 
 // ---------------------------------------------------------------- ajustes
