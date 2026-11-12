@@ -10,7 +10,7 @@ import * as L from './logica.js';
 import * as B from './bloqueo.js';
 import { h, vistaDatos, vistaVehiculos, vistaPropiedades, minimizar, CLAVES_FOTOS, NOMBRES_CAMPOS, lugarConMapa, linkMapa } from './vistas.js';
 
-const VERSION_APP = '1.5.0';
+const VERSION_APP = '1.7.0';
 const app = document.getElementById('app');
 const graph = crearGraph({ token: auth.token });
 
@@ -250,8 +250,9 @@ async function sincronizar() {
     ultimoErrorSesion = false;
     for (const p of lista) {
       try {
-        await ops.procesarPendiente(p, (q) => pendientes.guardar({ ...q, error: null }));
-        await pendientes.quitar(p.id);
+        // (el último error se mantiene visible mientras se reintenta; desaparece solo al subir de verdad)
+        await ops.procesarPendiente(p, (q) => pendientes.guardar({ ...q }));
+        await pendientes.quitar(p.id); // solo después de confirmar en OneDrive (ver operaciones.js)
         subidas++;
       } catch (e) {
         if (e instanceof auth.SesionCaducada) throw e;
@@ -310,7 +311,7 @@ vistas.elegirRaiz = async () => {
         ir('directorio', {}, { reemplazar: true });
       };
       lista.replaceChildren(
-        pila.length > 1 ? h('li', { onclick: () => { pila.pop(); abrir(pila.at(-1)); } }, h('span', {}, '⬑'), h('div', { class: 'crece' }, 'Subir un nivel')) : null,
+        ...(pila.length > 1 ? [h('li', { onclick: () => { pila.pop(); abrir(pila.at(-1)); } }, h('span', {}, '⬑'), h('div', { class: 'crece' }, 'Subir un nivel'))] : []),
         ...hijos.filter((x) => !L.leerNombreCarpeta(x.name)).sort((a, b) => a.name.localeCompare(b.name, 'es')).map((x) =>
           h('li', { onclick: () => { const c = { driveId: carpeta.driveId, id: x.id, name: x.name }; pila.push(c); abrir(c); } },
             h('span', {}, '📁'), h('div', { class: 'crece' }, h('div', {}, x.name), h('div', { class: 'sub' }, `${x.folder.childCount} elementos`)))));
@@ -372,11 +373,28 @@ vistas.directorio = async () => {
 const PESTANAS = [['historial', 'Historial'], ['datos', 'Datos'], ['vehiculos', 'Vehículos'], ['propiedades', 'Propiedades'], ['fotos', 'Fotos'], ['pdf', 'PDF']];
 
 vistas.expediente = async ({ carpeta, pestana = 'historial' }) => {
-  const main = pantalla(`${carpeta.numero} · ${carpeta.investigado || carpeta.edp}`, { atras: true, acciones: [chipPendientes()] });
+  const main = pantalla(`${carpeta.numero} · ${carpeta.investigado || carpeta.edp}`, { atras: true, acciones: [
+    chipPendientes(),
+    h('button', { 'aria-label': 'Actualizar', title: 'Volver a leer la ficha de OneDrive', onclick: () => { estado(main, enLinea() ? 'Leyendo la ficha de OneDrive…' : '', ''); cargar(); } }, '↻')] });
   const nav = h('nav', { class: 'pestanas', role: 'tablist' });
   const cuerpo = h('div');
+  const barraPend = h('div', { class: 'barra-pendientes', hidden: true });
   main.before(nav);
-  main.append(cuerpo);
+  main.append(barraPend, cuerpo);
+  // «⏳ N pendientes · Reintentar ahora» (lo de este expediente que aún no está confirmado en OneDrive)
+  const pintarBarra = async () => {
+    const mias = (await pendientes.todos()).filter((p) => p.carpetaId === carpeta.id);
+    barraPend.hidden = !mias.length;
+    if (!mias.length) return;
+    const conError = mias.find((p) => p.error);
+    barraPend.replaceChildren(...[
+      h('span', {}, `⏳ ${mias.length} ${mias.length === 1 ? 'pendiente' : 'pendientes'} · `),
+      sincronizando ? h('span', {}, 'subiendo…') :
+        h('button', { class: 'enlace', type: 'button', onclick: () => { if (!enLinea()) { barraPend.querySelector('.ultimo')?.remove(); barraPend.append(h('div', { class: 'ultimo' }, 'Sin conexión: se subirá sola cuando vuelva la cobertura.')); return; } sincronizar(); setTimeout(pintarBarra, 100); } }, 'Reintentar ahora'),
+      conError ? h('div', { class: 'ultimo' }, 'Último aviso: ' + conError.error) : null].filter(Boolean));
+  };
+  pintarBarra();
+  const intervaloBarra = setInterval(() => { if (!document.body.contains(barraPend)) clearInterval(intervaloBarra); else pintarBarra(); }, 3000);
   let ficha = await cache.get('ficha:' + carpeta.id);
 
   const elegir = (p) => {
@@ -432,9 +450,10 @@ vistas.expediente = async ({ carpeta, pestana = 'historial' }) => {
     }
   }
 
-  alSincronizar = (subidas) => { if (subidas) cargar(); else if (pestana === 'historial') pintar(); };
+  alSincronizar = (subidas) => { pintarBarra(); if (subidas) cargar(); else if (pestana === 'historial') pintar(); };
   elegir(pestana);
   cargar();
+  sincronizar(); // al abrir el expediente se reintenta lo pendiente
 };
 
 async function vistaHistorial(carpeta, valores) {
@@ -443,20 +462,27 @@ async function vistaHistorial(carpeta, valores) {
   hist.sort((a, b) => L.ordenEntrada(b).localeCompare(L.ordenEntrada(a)));
   const tarjeta = (e, { pendiente, error } = {}) => h('article', { class: 'tarjeta entrada' + (pendiente ? ' pendiente' : '') },
     h('div', { class: 'cab' }, h('span', {}, `${e.FECHA} · ${e.HORA}`),
-      pendiente ? h('span', { class: 'etiqueta' + (error ? ' error' : '') }, error ? 'Error al subir' : 'Pendiente de subir') : null),
+      pendiente ? h('span', { class: 'etiqueta' + (error ? ' error' : '') }, error ? '⏳ No se pudo subir · se reintentará' : '⏳ Pendiente de subir') : null),
     // Con GPS, el mapa va a las coordenadas exactas; sin GPS, a la dirección escrita
     e.GPS ? h('div', { class: 'lugar' }, e.LUGAR || 'GPS ' + e.GPS, ' ', linkMapa(e.GPS.replace(/\s/g, ''))) :
       e.LUGAR ? h('div', { class: 'lugar' }, lugarConMapa(e.LUGAR)) : null,
-    e.AUDIO && (L.limpiaTexto(e.AUDIO_ESTADO) === 'pendiente' || !L.limpiaTexto(e.TEXTO))
-      ? h('div', { class: 'texto nota-voz' }, '🎙 Nota de voz pendiente de transcribir', e.AUDIO_DURACION ? h('span', { class: 'sub' }, ' · ' + duracionTexto(e.AUDIO_DURACION)) : null)
-      : h('div', { class: 'texto' }, e.TEXTO || ''),
+    e._audioSinSubir
+      ? h('div', { class: 'texto nota-voz' }, '🎙 Audio pendiente de subir', e.AUDIO_DURACION ? h('span', { class: 'sub' }, ' · ' + duracionTexto(e.AUDIO_DURACION)) : null)
+      : e.AUDIO && (L.limpiaTexto(e.AUDIO_ESTADO) === 'pendiente' || !L.limpiaTexto(e.TEXTO))
+        ? h('div', { class: 'texto nota-voz' }, '🎙 Nota de voz pendiente de transcribir', e.AUDIO_DURACION ? h('span', { class: 'sub' }, ' · ' + duracionTexto(e.AUDIO_DURACION)) : null)
+        : h('div', { class: 'texto' }, e.TEXTO || ''),
     error ? h('p', { class: 'sub' }, error) : null);
   const out = [h('div', { class: 'botones' },
     h('button', { class: 'boton', onclick: () => ir('nuevaEntrada', { carpeta }) }, '＋ Nueva entrada'),
     h('button', { class: 'boton grabar', onclick: () => ir('notaVoz', { carpeta }) }, '🎙 Nota de voz'))];
   for (const p of pend) {
-    const t = tarjeta(p.audio ? { ...p.entrada, AUDIO: p.audio.nombre, AUDIO_ESTADO: 'pendiente', AUDIO_DURACION: p.audio.duracion } : p.entrada, { pendiente: true, error: p.error });
-    if (p.audio?.blob) t.append(h('audio', { controls: true, preload: 'metadata', src: URL.createObjectURL(p.audio.blob), class: 'audio' }));
+    const t = tarjeta(p.audio ? { ...p.entrada, AUDIO: p.audio.nombre, AUDIO_ESTADO: 'pendiente', AUDIO_DURACION: p.audio.duracion, _audioSinSubir: !p.audio.ruta } : p.entrada, { pendiente: true, error: p.error });
+    if (p.audio) {
+      // Estado del audio: «en el móvil» (aún completándola), «pendiente de subir» o «subido»
+      t.append(p.audio.ruta ? etiquetaAudio('subido') : p.esperando ? etiquetaAudio('movil') : etiquetaAudio('pendiente'));
+      if (p.audio.blob) t.append(h('audio', { controls: true, preload: 'metadata', src: URL.createObjectURL(p.audio.blob), class: 'audio' }));
+      else if (p.audio.ruta) t.append(reproductorAudio(carpeta, p.audio.ruta));
+    }
     const locales = p.fotos.filter((f) => f.blob);
     if (locales.length) t.append(h('div', { class: 'rejilla' }, locales.map((f) => {
       const url = URL.createObjectURL(f.blob);
@@ -466,7 +492,7 @@ async function vistaHistorial(carpeta, valores) {
   }
   for (const e of hist) {
     const t = tarjeta(e);
-    if (e.AUDIO) t.append(reproductorOneDrive(carpeta, e.AUDIO));
+    if (e.AUDIO) t.append(etiquetaAudio('subido'), reproductorAudio(carpeta, e.AUDIO, pend));
     if (Array.isArray(e.FOTOS) && e.FOTOS.length) t.append(rejillaFotos(carpeta, e.FOTOS));
     out.push(t);
   }
@@ -476,22 +502,62 @@ async function vistaHistorial(carpeta, valores) {
 
 const duracionTexto = (seg) => { const s = Math.round(Number(seg) || 0); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 
-/** Botón «Escuchar» para una nota de voz que ya está en OneDrive (se descarga solo al pulsar). */
-function reproductorOneDrive(carpeta, ruta) {
+const ETIQUETAS_AUDIO = {
+  movil: ['📱 En el móvil', 'audio-movil'],
+  pendiente: ['⏳ Pendiente de subir', 'audio-pendiente'],
+  subido: ['☁ Subido', 'audio-subido'],
+  falta: ['⚠ No está en OneDrive', 'audio-falta'],
+};
+const etiquetaAudio = (k) => h('span', { class: 'estado-audio ' + ETIQUETAS_AUDIO[k][1] }, ETIQUETAS_AUDIO[k][0]);
+
+// Audios descargados de OneDrive en esta sesión (caché temporal: solo en memoria, se pierde al cerrar la app)
+const audiosDescargados = new Map();
+
+/**
+ * Botón «Escuchar» de una nota de voz.
+ * 1.º si el audio sigue en el móvil (pendiente), se usa esa copia;
+ * 2.º si no, se descarga de OneDrive (aunque se haya movido o renombrado) a una caché temporal.
+ */
+function reproductorAudio(carpeta, ruta, pend = []) {
+  const rel = L.rutaRelativaLimpia(ruta);
+  const nombre = rel.split('/').pop();
+  const clave = carpeta.id + '|' + rel.toLowerCase();
   const caja = h('div', { class: 'audio-caja' });
+  const poner = (url, nota) => caja.replaceChildren(...[h('audio', { controls: true, autoplay: true, src: url, class: 'audio' }), nota ? h('p', { class: 'sub' }, nota) : null].filter(Boolean));
+  const marcar = (k) => { const et = caja.previousElementSibling; if (et?.classList.contains('estado-audio')) et.replaceWith(etiquetaAudio(k)); };
   const boton = h('button', { class: 'boton sec', type: 'button', onclick: async () => {
-    if (!enLinea()) { boton.textContent = 'Sin conexión para escuchar'; return; }
-    boton.disabled = true; boton.textContent = 'Cargando…';
+    // Copia en el móvil
+    const local = pend.find((p) => p.audio?.blob && (p.audio.ruta === rel || p.audio.nombre === nombre));
+    if (local) return poner(URL.createObjectURL(local.audio.blob));
+    if (audiosDescargados.has(clave)) return poner(audiosDescargados.get(clave));
+    if (!enLinea()) { boton.textContent = 'Sin conexión: no se puede descargar ahora'; return; }
+    boton.disabled = true; boton.textContent = 'Descargando audio…';
     try {
-      const it = await graph.itemPorRuta(carpeta.driveId, carpeta.id, L.rutaRelativaLimpia(ruta));
-      if (!it?.['@microsoft.graph.downloadUrl']) throw new Error('No se encuentra el audio: ' + ruta);
-      const a = h('audio', { controls: true, autoplay: true, src: it['@microsoft.graph.downloadUrl'], class: 'audio' });
-      caja.replaceChildren(a);
-    } catch (e) { boton.disabled = false; boton.textContent = e.message; }
+      const ops = await obtenerOps();
+      const hallado = await ops.buscarAudio(carpeta.driveId, carpeta.id, rel);
+      caja.querySelector('.estado')?.remove();
+      if (!hallado) {
+        marcar('falta');
+        boton.disabled = false;
+        boton.textContent = '▶ Reintentar';
+        caja.append(h('p', { class: 'estado error' }, `El audio no está en el móvil ni en OneDrive (${rel}).`));
+        return;
+      }
+      const datos = await graph.bytes(hallado.item); // por enlace de descarga o, si no lo da, por /content
+      const url = URL.createObjectURL(new Blob([datos], { type: tipoAudio(hallado.item.name) }));
+      audiosDescargados.set(clave, url);
+      poner(url, hallado.ruta.toLowerCase() !== rel.toLowerCase() ? `Encontrado en OneDrive como «${hallado.ruta}».` : null);
+    } catch (e) {
+      boton.disabled = false;
+      boton.textContent = '▶ Reintentar';
+      caja.querySelector('.estado')?.remove();
+      caja.append(h('p', { class: 'estado error' }, 'No se pudo descargar el audio de OneDrive: ' + e.message));
+    }
   } }, '▶ Escuchar nota de voz');
   caja.append(boton);
   return caja;
 }
+const tipoAudio = (n) => ({ m4a: 'audio/mp4', mp4: 'audio/mp4', aac: 'audio/aac', webm: 'audio/webm', ogg: 'audio/ogg', opus: 'audio/ogg', mp3: 'audio/mpeg', wav: 'audio/wav' })[(n.split('.').pop() || '').toLowerCase()] || 'application/octet-stream';
 
 function vistaPdf(carpeta) {
   const caja = h('div', {}, h('p', { class: 'vacio' }, enLinea() ? 'Buscando PDF…' : 'Hace falta conexión para abrir los PDF.'));
@@ -737,7 +803,26 @@ vistas.notaVoz = async ({ carpeta }) => {
         h('button', { class: 'boton sec', type: 'button', onclick: () => camara.click() }, '📷 Cámara'),
         h('button', { class: 'boton sec', type: 'button', onclick: () => galeria.click() }, '🖼 Galería')),
       camara, galeria, rejilla, h('p'),
-      h('button', { class: 'boton ancho', type: 'button', onclick: () => history.back() }, 'Listo'));
+      h('button', { class: 'boton ancho', type: 'button', onclick: () => history.back() }, 'Listo'),
+      h('p'),
+      h('button', { class: 'boton sec ancho', type: 'button', onclick: descartar }, '🗑 Descartar y volver a grabar'),
+      h('p', { class: 'sub' }, 'Solo mientras no pulses «Listo»: la nota aún está únicamente en el móvil.'));
+  }
+
+  // Descartar la nota recién grabada (solo existe en el móvil: en OneDrive no se toca nada) y grabar otra
+  async function descartar() {
+    if (!registro) return;
+    const actual = await pendientes.get(registro.id);
+    if (!actual || !actual.esperando || actual.audio?.ruta) {
+      estado(main, 'Esta nota ya se está subiendo a OneDrive y no se puede descartar. Graba otra nota y descarta esta en el PC al revisar.', 'aviso');
+      return;
+    }
+    if (!confirm('¿Descartar esta nota de voz? Se borrará del móvil y no se podrá recuperar.')) return;
+    await pendientes.quitar(registro.id);
+    registro = null;
+    fotos.forEach((f) => URL.revokeObjectURL(f.url));
+    antesDeSalir = null;
+    ir('notaVoz', { carpeta }, { reemplazar: true }); // empieza a grabar de nuevo
   }
 
   // Al salir de la pantalla: si está grabando, para y guarda; si ya está guardada, se libera para subir

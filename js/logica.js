@@ -83,6 +83,45 @@ export function normalizarEntrada(e) {
   return out;
 }
 
+// ---------- Lo que el PC manda: entradas ya presentes y entradas descartadas ----------
+const normEsp = (t) => limpiaTexto(t).replace(/\s+/g, ' ').trim();
+const primeros60 = (t) => Array.from(normEsp(t)).slice(0, 60).join(''); // 60 caracteres, como Python
+
+/** Clave con la que el PC apunta en valores._DESCARTADAS lo que corrigió o quitó:
+ *  ["h", FECHA, HORA, primeros 60 caracteres del TEXTO con espacios normalizados] (+ ruta del AUDIO). */
+export function claveDescartada(e) {
+  const k = ['h', limpiaTexto(e?.FECHA), limpiaTexto(e?.HORA), primeros60(e?.TEXTO)];
+  const audio = rutaRelativaLimpia(limpiaTexto(e?.AUDIO));
+  if (audio) k.push(audio);
+  return k;
+}
+
+/** ¿El PC ha descartado (corregido o quitado) esta entrada? */
+export function estaDescartada(e, descartadas) {
+  if (!Array.isArray(descartadas) || !descartadas.length) return false;
+  const k = claveDescartada(e);
+  const n = (v, i) => (i === 3 ? primeros60(v) : i === 4 ? rutaRelativaLimpia(limpiaTexto(v)).toLowerCase() : limpiaTexto(v));
+  const kn = k.map(n);
+  return descartadas.some((d) => {
+    let l = d;
+    if (typeof l === 'string') { try { l = JSON.parse(l); } catch { return false; } }
+    if (!Array.isArray(l) || l.length < 4 || limpiaTexto(l[0]) !== 'h') return false;
+    for (let i = 1; i < 4; i++) if (n(l[i], i) !== kn[i]) return false;
+    if (l.length >= 5) return kn.length >= 5 && n(l[4], 4) === kn[4]; // la descartada tenía audio: tiene que ser ese audio
+    return true;
+  });
+}
+
+/** ¿Ya está esta entrada en el historial? Misma fecha, hora y texto (o mismo audio),
+ *  o alguna de sus fotos ya está en otra entrada (entonces se subió antes y el PC la ha corregido). */
+export function yaEsta(e, historial) {
+  const lista = Array.isArray(historial) ? historial : [];
+  const k = claveEntrada(e);
+  const n = (r) => rutaRelativaLimpia(limpiaTexto(r)).toLowerCase();
+  const fotos = new Set((e?.FOTOS || []).map((f) => n(f?.ruta)).filter(Boolean));
+  return lista.some((x) => x && (claveEntrada(x) === k || (fotos.size && Array.isArray(x.FOTOS) && x.FOTOS.some((f) => fotos.has(n(f?.ruta))))));
+}
+
 // ---------- Notas de voz ----------
 export const CARPETA_AUDIOS = 'Audios';
 /** "Nota 2026-11-03 10-42-15.m4a" (fecha y hora de inicio, con segundos) */
@@ -273,16 +312,19 @@ export function añadirAlHistorialBytes(bytes, nuevas) {
   if (!(h0 == null || h0 === '' || Array.isArray(h0)))
     throw new Error('El historial de la ficha tiene un formato inesperado. No se toca.');
 
-  // Qué entradas son nuevas de verdad (la comparación es la de siempre)
-  const existentes = new Set((Array.isArray(h0) ? h0 : []).map(claveEntrada));
+  // Qué entradas son nuevas de verdad: no están ya (aunque el PC las haya corregido)
+  // y el PC no las ha descartado (valores._DESCARTADAS, que se conserva tal cual)
+  const existentes = [...(Array.isArray(h0) ? h0 : [])];
   const añadir = [];
+  let descartadas = 0;
   for (const e of nuevas) {
-    const k = claveEntrada(e);
-    if (existentes.has(k)) continue;
-    existentes.add(k);
-    añadir.push(normalizarEntrada(e));
+    if (yaEsta(e, existentes)) continue;
+    if (estaDescartada(e, obj.valores._DESCARTADAS)) { descartadas++; continue; }
+    const n = normalizarEntrada(e);
+    existentes.push(n);
+    añadir.push(n);
   }
-  if (!añadir.length) return { bytes, añadidas: 0 };
+  if (!añadir.length) return { bytes, añadidas: 0, descartadas };
 
   const conv = (s) => (estilo.crlf ? s.replace(/\r?\n/g, '\r\n') : s);
   const ser = (v, nivel) => conv(jsonComoPython(v, { sangria: estilo.sangria, ascii: estilo.ascii }, nivel));
@@ -326,11 +368,11 @@ export function añadirAlHistorialBytes(bytes, nuevas) {
   if (!deepIgual(leido, esperado)) throw new Error('Error interno al preparar la ficha. No se ha guardado nada.');
 
   const cuerpo = new TextEncoder().encode(nuevo);
-  if (!estilo.bom) return { bytes: cuerpo, añadidas: añadir.length };
+  if (!estilo.bom) return { bytes: cuerpo, añadidas: añadir.length, descartadas };
   const out = new Uint8Array(cuerpo.length + 3);
   out.set([0xef, 0xbb, 0xbf]);
   out.set(cuerpo, 3);
-  return { bytes: out, añadidas: añadir.length };
+  return { bytes: out, añadidas: añadir.length, descartadas };
 }
 
 // ---------- Fechas ----------

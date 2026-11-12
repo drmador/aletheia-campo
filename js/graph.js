@@ -93,6 +93,13 @@ export function crearGraph({ token, fetch: f = (...a) => fetch(...a) }) {
         cuerpo: contenido,
       }),
 
+    /** Busca archivos por nombre dentro de una carpeta (y sus subcarpetas). */
+    async buscar(driveId, carpetaId, texto) {
+      const q = String(texto).replace(/'/g, "''");
+      const j = await pedir(`/drives/${driveId}/items/${carpetaId}/search(q='${encodeURIComponent(q)}')?$top=50&$select=${CAMPOS}`);
+      return j.value || [];
+    },
+
     async miniatura(driveId, itemId, tam = 'large') {
       const j = await pedir(`/drives/${driveId}/items/${itemId}/thumbnails?$select=${tam}`);
       return j.value?.[0]?.[tam]?.url || null;

@@ -144,3 +144,17 @@ audio.audio { width: 100%; margin: 6px 0; }
 
 /* Lo oculto se oculta siempre, aunque otra regla le dé display */
 [hidden] { display: none !important; }
+
+.estado-audio { display: inline-block; font-size: .75rem; font-weight: 700; border-radius: 6px; padding: 1px 8px; margin: 4px 0; }
+.audio-movil { background: #e8eefb; color: #23395b; }
+.audio-pendiente { background: var(--marca-2); color: #1d1d1d; }
+.audio-subido { background: #e3f1e8; color: #2f7a4d; }
+@media (prefers-color-scheme: dark) { .audio-movil { background: #23395b; color: #e9edf3; } .audio-subido { background: #1f3b2a; color: #bfe3cc; } }
+.audio-falta { background: var(--error); color: #fff; }
+
+.entrada.desaparecida { border-left-color: var(--error); }
+.aviso-desaparecida { margin: 0 0 8px; color: var(--error); font-weight: 600; font-size: .9rem; }
+
+.barra-pendientes { background: var(--marca-2); color: #1d1d1d; border-radius: 10px; padding: 8px 12px; margin: 0 0 10px; font-weight: 600; font-size: .9rem; }
+.barra-pendientes button.enlace { color: #1d1d1d; }
+.barra-pendientes .ultimo { font-weight: 400; font-size: .82rem; margin-top: 4px; }
