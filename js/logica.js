@@ -51,11 +51,30 @@ export const limpiaTexto = (t) => nfc(t).replace(/\r\n?/g, '\n').trim();
 // Dos entradas son «la misma» si coinciden fecha, hora y texto.
 // Las notas de voz se distinguen por su audio (aunque se graben dos en el mismo minuto,
 // y aunque el PC ya la haya transcrito o dividido en varias entradas con el mismo AUDIO).
+// Las entradas sin texto (solo fotos) se distinguen además por sus fotos, para que dos
+// de solo foto en el mismo minuto no se confundan.
 export function claveEntrada(e) {
   const audio = rutaRelativaLimpia(limpiaTexto(e?.AUDIO)).toLowerCase();
   if (audio) return 'AUDIO\u0001' + audio;
-  return [limpiaTexto(e?.FECHA), limpiaTexto(e?.HORA), limpiaTexto(e?.TEXTO)].join('\u0001');
+  const texto = limpiaTexto(e?.TEXTO);
+  const k = [limpiaTexto(e?.FECHA), limpiaTexto(e?.HORA), texto];
+  if (!texto) k.push((e?.FOTOS || []).map((f) => rutaRelativaLimpia(limpiaTexto(f?.ruta)).toLowerCase()).filter(Boolean).sort().join('|'));
+  return k.join('\u0001');
 }
+
+// ---------- Kilómetros del coche (KM): texto, solo cifras ----------
+// Acepta «84120», «84.120», «84 120 km», «84120,5» (se queda la parte entera).
+// Devuelve { km: '84120' }, { km: '' } si está vacío, o { error } si no es un número válido.
+export function limpiarKM(valor) {
+  let s = limpiaTexto(valor).toLowerCase().replace(/km\.?/g, '').trim();
+  if (!s) return { km: '' };
+  s = s.split(',')[0];               // decimales con coma: fuera
+  s = s.replace(/[.\s\u00a0']/g, '');   // separadores de miles: fuera
+  if (!/^\d{1,7}$/.test(s)) return { error: 'Los km deben ser solo cifras (por ejemplo 84120).' };
+  return { km: String(Number(s)) };
+}
+/** «84120» → «84.120» (para enseñarlo) */
+export const formatoKM = (km) => String(km ?? '').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 
 // ---------- Coordenadas GPS: "42.240612, -8.720700" (6 decimales, punto decimal) ----------
 export const formatoGPS = (lat, lon) => `${Number(lat).toFixed(6)}, ${Number(lon).toFixed(6)}`;
@@ -78,8 +97,11 @@ export function normalizarEntrada(e) {
     out.AUDIO_ESTADO = 'pendiente';
     const d = Number(e.AUDIO_DURACION);
     if (Number.isFinite(d) && d > 0) out.AUDIO_DURACION = Math.round(d * 10) / 10;
-    out.ordenador = 'Móvil';
   }
+  // Km del coche: solo si se anotaron, como texto y solo cifras
+  const km = limpiarKM(e.KM);
+  if (km.km) out.KM = km.km;
+  if (out.AUDIO || out.KM) out.ordenador = 'Móvil';
   return out;
 }
 

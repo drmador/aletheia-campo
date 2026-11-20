@@ -10,7 +10,7 @@ import * as L from './logica.js';
 import * as B from './bloqueo.js';
 import { h, vistaDatos, vistaVehiculos, vistaPropiedades, minimizar, CLAVES_FOTOS, NOMBRES_CAMPOS, lugarConMapa, linkMapa } from './vistas.js';
 
-const VERSION_APP = '1.7.0';
+const VERSION_APP = '1.8.0';
 const app = document.getElementById('app');
 const graph = crearGraph({ token: auth.token });
 
@@ -458,8 +458,9 @@ vistas.expediente = async ({ carpeta, pestana = 'historial' }) => {
 
 async function vistaHistorial(carpeta, valores) {
   const pend = (await pendientes.todos()).filter((p) => p.carpetaId === carpeta.id).sort((a, b) => b.creado - a.creado);
-  const hist = Array.isArray(valores?.HISTORIAL) ? [...valores.HISTORIAL] : [];
-  hist.sort((a, b) => L.ordenEntrada(b).localeCompare(L.ordenEntrada(a)));
+  // Más recientes arriba; si coinciden fecha y hora, la añadida después va primero
+  const hist = (Array.isArray(valores?.HISTORIAL) ? valores.HISTORIAL : []).map((e, i) => [e, i])
+    .sort(([a, ia], [b, ib]) => L.ordenEntrada(b).localeCompare(L.ordenEntrada(a)) || ib - ia).map(([e]) => e);
   const tarjeta = (e, { pendiente, error } = {}) => h('article', { class: 'tarjeta entrada' + (pendiente ? ' pendiente' : '') },
     h('div', { class: 'cab' }, h('span', {}, `${e.FECHA} · ${e.HORA}`),
       pendiente ? h('span', { class: 'etiqueta' + (error ? ' error' : '') }, error ? '⏳ No se pudo subir · se reintentará' : '⏳ Pendiente de subir') : null),
@@ -471,10 +472,14 @@ async function vistaHistorial(carpeta, valores) {
       : e.AUDIO && (L.limpiaTexto(e.AUDIO_ESTADO) === 'pendiente' || !L.limpiaTexto(e.TEXTO))
         ? h('div', { class: 'texto nota-voz' }, '🎙 Nota de voz pendiente de transcribir', e.AUDIO_DURACION ? h('span', { class: 'sub' }, ' · ' + duracionTexto(e.AUDIO_DURACION)) : null)
         : h('div', { class: 'texto' }, e.TEXTO || ''),
+    e.KM ? h('span', { class: 'etiqueta-km' }, `🚗 ${L.formatoKM(e.KM)} km`) : null,
     error ? h('p', { class: 'sub' }, error) : null);
   const out = [h('div', { class: 'botones' },
     h('button', { class: 'boton', onclick: () => ir('nuevaEntrada', { carpeta }) }, '＋ Nueva entrada'),
-    h('button', { class: 'boton grabar', onclick: () => ir('notaVoz', { carpeta }) }, '🎙 Nota de voz'))];
+    h('button', { class: 'boton grabar', onclick: () => ir('notaVoz', { carpeta }) }, '🎙 Nota de voz')),
+  h('div', { class: 'botones servicio' },
+    h('button', { class: 'boton sec', onclick: () => ir('nuevaEntrada', { carpeta, tipo: 'inicio' }) }, '▶ Inicio de servicio'),
+    h('button', { class: 'boton sec', onclick: () => ir('nuevaEntrada', { carpeta, tipo: 'fin' }) }, '■ Fin de servicio'))];
   for (const p of pend) {
     const t = tarjeta(p.audio ? { ...p.entrada, AUDIO: p.audio.nombre, AUDIO_ESTADO: 'pendiente', AUDIO_DURACION: p.audio.duracion, _audioSinSubir: !p.audio.ruta } : p.entrada, { pendiente: true, error: p.error });
     if (p.audio) {
@@ -611,16 +616,25 @@ function extension(file) {
   return ({ 'image/png': 'png', 'image/heic': 'heic', 'image/webp': 'webp' })[file.type] || 'jpg';
 }
 
-vistas.nuevaEntrada = async ({ carpeta }) => {
+// Botones rápidos: el PC calcula horas y km del servicio a partir de estos textos
+const RAPIDAS = {
+  inicio: { titulo: '▶ Inicio de servicio', texto: 'Se inicia servicio.' },
+  fin: { titulo: '■ Fin de servicio', texto: 'Finaliza servicio.' },
+};
+
+vistas.nuevaEntrada = async ({ carpeta, tipo }) => {
   const ahora = new Date();
   const fotos = [];
-  const main = pantalla('Nueva entrada', { atras: true });
+  const rapida = RAPIDAS[tipo] || null;
+  const main = pantalla(rapida ? rapida.titulo : 'Nueva entrada', { atras: true });
+  const km = h('input', { inputMode: 'numeric', type: 'text', placeholder: 'Ej. 84120', autocomplete: 'off', enterKeyHint: 'done', class: 'km' });
   const fecha = h('input', { inputMode: 'numeric', value: L.fechaES(ahora), placeholder: 'dd/mm/aaaa' });
   const hora = h('input', { inputMode: 'numeric', value: L.horaES(ahora), placeholder: 'hh:mm' });
   const lugar = h('input', { placeholder: 'Calle, número, localidad' });
   const notaGps = h('div', { class: 'sub' });
   let gpsActual = null; // coordenadas de esta entrada (se guardan aparte, en GPS)
-  const texto = h('textarea', { placeholder: 'Qué ha pasado…' });
+  const texto = h('textarea', { placeholder: 'Qué ha pasado…', value: rapida ? rapida.texto : '' });
+  const textoInicial = texto.value;
   const rejilla = h('div', { class: 'rejilla grande' });
   const camara = h('input', { type: 'file', accept: 'image/*', capture: 'environment', hidden: true });
   const galeria = h('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true });
@@ -658,13 +672,17 @@ vistas.nuevaEntrada = async ({ carpeta }) => {
   camara.addEventListener('change', () => { añadir(camara.files); camara.value = ''; });
   galeria.addEventListener('change', () => { añadir(galeria.files); galeria.value = ''; });
 
-  antesDeSalir = () => (!texto.value.trim() && !fotos.length) || confirm('¿Salir sin guardar esta entrada?');
+  antesDeSalir = () => ((texto.value.trim() === textoInicial.trim() || !texto.value.trim()) && !fotos.length && !km.value.trim()) || confirm('¿Salir sin guardar esta entrada?');
 
-  guardar.addEventListener('click', async () => {
+  // Guardar (conKm = false → botón «Saltar»: se guarda sin km)
+  const guardarEntrada = async (conKm = true) => {
     const F = fecha.value.trim(), Hh = hora.value.trim();
     if (!L.esFechaES(F)) return estado(main, 'La fecha debe ser dd/mm/aaaa.', 'error');
     if (!L.esHoraES(Hh)) return estado(main, 'La hora debe ser hh:mm.', 'error');
-    if (!texto.value.trim()) return estado(main, 'Escribe una descripción.', 'error');
+    const k = conKm ? L.limpiarKM(km.value) : { km: '' };
+    if (k.error) { km.focus(); return estado(main, k.error, 'error'); }
+    // Basta con texto, con una foto o con los km (ya no hace falta poner un punto)
+    if (!texto.value.trim() && !fotos.length && !k.km) return estado(main, 'Escribe una descripción o añade una foto.', 'error');
     guardar.disabled = true;
     const cacheFicha = await cache.get('ficha:' + carpeta.id);
     await pendientes.guardar({
@@ -672,21 +690,30 @@ vistas.nuevaEntrada = async ({ carpeta }) => {
       driveId: carpeta.driveId, carpetaId: carpeta.id, numero: carpeta.numero, investigado: carpeta.investigado,
       fichaId: cacheFicha?.fichaId || null,
       expNumero: String(cacheFicha?.obj?.valores?.EXP_NUMERO ?? '').trim() || null,
-      entrada: { FECHA: F, HORA: Hh, LUGAR: lugar.value.trim(), ...(gpsActual ? { GPS: gpsActual } : {}), TEXTO: texto.value.trim() },
+      entrada: { FECHA: F, HORA: Hh, LUGAR: lugar.value.trim(), ...(gpsActual ? { GPS: gpsActual } : {}), TEXTO: texto.value.trim(), ...(k.km ? { KM: k.km } : {}) },
       fotos: fotos.map((f) => ({ nombre: f.nombre, blob: f.blob, pie: f.pie.trim() })),
     });
     fotos.forEach((f) => URL.revokeObjectURL(f.url));
     antesDeSalir = null;
     history.back();
     setTimeout(sincronizar, 300);
-  });
+  };
+  guardar.addEventListener('click', () => guardarEntrada(true));
+  km.addEventListener('input', () => { if (main.querySelector(':scope > .estado.error')) estado(main, ''); });
+  km.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); guardarEntrada(true); } });
 
+  const campoKm = [h('label', {}, 'Km del coche (opcional)'), km];
   main.append(
+    // En los botones rápidos, lo primero es pedir los km (con «Saltar» para no ponerlos)
+    ...(rapida ? [...campoKm, h('div', { class: 'botones' },
+      h('button', { class: 'boton', type: 'button', onclick: () => guardarEntrada(true) }, 'Guardar'),
+      h('button', { class: 'boton sec', type: 'button', onclick: () => guardarEntrada(false) }, 'Saltar')), h('p')] : []),
     h('div', { class: 'fila2' }, h('div', {}, h('label', {}, 'Fecha'), fecha), h('div', {}, h('label', {}, 'Hora'), hora)),
     h('label', {}, 'Lugar'), lugar,
     h('div', { class: 'botones' }, h('button', { class: 'boton sec', type: 'button', onclick: gps }, '📍 Ubicación actual')),
     notaGps, h('p'),
-    h('label', {}, 'Descripción'), texto,
+    h('label', {}, rapida ? 'Descripción (puedes añadir más texto)' : 'Descripción'), texto,
+    ...(rapida ? [] : campoKm),
     h('label', {}, 'Fotos'),
     h('div', { class: 'botones' },
       h('button', { class: 'boton sec', type: 'button', onclick: () => camara.click() }, '📷 Cámara'),
@@ -695,6 +722,7 @@ vistas.nuevaEntrada = async ({ carpeta }) => {
     guardar,
     h('p', { class: 'sub' }, enLinea() ? 'Se subirá a OneDrive al guardar.' : 'Sin conexión: se guarda en el móvil y se subirá sola cuando vuelva la cobertura.'));
   gps();
+  if (rapida) setTimeout(() => km.focus(), 50); // abre el teclado de números
 };
 
 // ---------------------------------------------------------------- nota de voz

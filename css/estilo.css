@@ -158,3 +158,9 @@ audio.audio { width: 100%; margin: 6px 0; }
 .barra-pendientes { background: var(--marca-2); color: #1d1d1d; border-radius: 10px; padding: 8px 12px; margin: 0 0 10px; font-weight: 600; font-size: .9rem; }
 .barra-pendientes button.enlace { color: #1d1d1d; }
 .barra-pendientes .ultimo { font-weight: 400; font-size: .82rem; margin-top: 4px; }
+
+/* ---- Km del coche ---- */
+.botones.servicio { margin-top: -4px; }
+.botones.servicio .boton { min-height: 44px; font-size: .95rem; }
+input.km { font-size: 1.4rem; font-variant-numeric: tabular-nums; letter-spacing: .5px; }
+.etiqueta-km { display: inline-block; font-size: .78rem; font-weight: 700; border-radius: 6px; padding: 1px 8px; margin: 6px 0 2px; background: var(--linea); color: var(--tinta); }

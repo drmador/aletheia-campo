@@ -6,7 +6,7 @@
 //   - registro de actividad: solo añadir líneas al final
 // ============================================================
 import {
-  leerFichaBytes, añadirAlHistorialBytes, comprobarFicha, yaEsta, estaDescartada,
+  leerFichaBytes, añadirAlHistorialBytes, comprobarFicha, yaEsta, estaDescartada, limpiaTexto as L_limpia,
   anexarRegistro, lineaRegistro, nombreRegistro, esNombreFicha,
   CARPETA_FOTOS_MOVIL, CARPETA_AUDIOS, nombreAlternativoAudio, fechaES, horaSegES, rutaRelativaLimpia,
 } from './logica.js';
@@ -164,8 +164,10 @@ export function crearOperaciones(graph, { ordenador, usuario }) {
       await guardarProgreso(p);
     }
     // 0.º leer la ficha de OneDrive: si la entrada ya está (aunque el PC la haya corregido) o el PC la
-    //     descartó, no se sube nada más (lo del PC manda)
-    if (p.fase !== 'registro' && !(p.audio && !p.audio.ruta)) { // (una nota cuyo audio no ha subido no puede estar ya)
+    //     descartó, no se sube nada más (lo del PC manda).
+    //     (Una nota cuyo audio no ha subido, o una entrada sin texto cuyas fotos no han subido, no puede estar ya.)
+    const sinIdentificar = (p.audio && !p.audio.ruta) || (!L_limpia(p.entrada.TEXTO) && p.fotos.length && !p.fotos.some((f) => f.ruta));
+    if (p.fase !== 'registro' && !sinIdentificar) {
       const { obj } = await leerFicha(p.driveId, p.fichaId);
       const borrador = { ...p.entrada, FOTOS: p.fotos.filter((f) => f.ruta).map((f) => ({ ruta: f.ruta })), ...(p.audio?.ruta ? { AUDIO: p.audio.ruta } : {}) };
       if (estaDescartada(borrador, obj.valores._DESCARTADAS)) { p.descartada = true; p.añadida = 0; p.fase = 'registro'; await guardarProgreso(p); }
@@ -196,7 +198,7 @@ export function crearOperaciones(graph, { ordenador, usuario }) {
       p.fase = 'registro';
       await guardarProgreso(p);
     }
-    const resumen = `${p.entrada.FECHA} ${p.entrada.HORA} · ${p.entrada.LUGAR || (p.entrada.GPS ? 'GPS ' + p.entrada.GPS : 'sin lugar')} · ${p.fotos.length} foto(s)`;
+    const resumen = `${p.entrada.FECHA} ${p.entrada.HORA} · ${p.entrada.LUGAR || (p.entrada.GPS ? 'GPS ' + p.entrada.GPS : 'sin lugar')} · ${p.fotos.length} foto(s)${p.entrada.KM ? ' · ' + p.entrada.KM + ' km' : ''}`;
     const acciones = [];
     for (const f of p.fotos) if (f.ruta) acciones.push(['Foto añadida', f.ruta]);
     if (p.descartada) {
