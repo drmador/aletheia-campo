@@ -59,6 +59,8 @@ export function claveEntrada(e) {
   const texto = limpiaTexto(e?.TEXTO);
   const k = [limpiaTexto(e?.FECHA), limpiaTexto(e?.HORA), texto];
   if (!texto) k.push((e?.FOTOS || []).map((f) => rutaRelativaLimpia(limpiaTexto(f?.ruta)).toLowerCase()).filter(Boolean).sort().join('|'));
+  const km = limpiarKM(e?.KM).km;
+  if (km) k.push('KM' + km); // dos «Se inicia servicio.» en el mismo minuto con distintos km son distintas
   return k.join('\u0001');
 }
 
@@ -142,6 +144,57 @@ export function yaEsta(e, historial) {
   const n = (r) => rutaRelativaLimpia(limpiaTexto(r)).toLowerCase();
   const fotos = new Set((e?.FOTOS || []).map((f) => n(f?.ruta)).filter(Boolean));
   return lista.some((x) => x && (claveEntrada(x) === k || (fotos.size && Array.isArray(x.FOTOS) && x.FOTOS.some((f) => fotos.has(n(f?.ruta))))));
+}
+
+// ---------- Copias en conflicto de OneDrive ----------
+// Cuando OneDrive no sabe qué versión vale, guarda las dos y a una le añade el nombre del PC:
+// «Información 0439-DESKTOP-0851N1F.json», «Registro de actividad 0439-DESKTOP-0851N1F.txt».
+export function copiasEnConflicto(nombres) {
+  return (nombres || []).filter((x) => {
+    const n = nfc(x).toLowerCase();
+    return /^informaci[oó]n\s+\d+\s*-\s*\S.*\.json$/.test(n) || /^registro de actividad\s+\d+\s*-\s*\S.*\.txt$/.test(n);
+  });
+}
+
+// ---------- Servicio abierto (inicio sin fin) ----------
+export const esInicioServicio = (t) => /^se inicia servicio/i.test(limpiaTexto(t).replace(/\s+/g, ' '));
+export const esFinServicio = (t) => /^finaliza servicio/i.test(limpiaTexto(t).replace(/\s+/g, ' '));
+/**
+ * Si la última entrada de inicio/fin de servicio es un INICIO de hoy o de ayer (servicios de noche),
+ * devuelve esa entrada; si no, null. `entradas` en orden de creación (las pendientes al final).
+ */
+export function servicioAbierto(entradas, ahora = new Date()) {
+  let ultima = null;
+  for (const e of entradas || []) {
+    if (!e || !(esInicioServicio(e.TEXTO) || esFinServicio(e.TEXTO))) continue;
+    if (!ultima || ordenEntrada(e) >= ordenEntrada(ultima)) ultima = e; // a igual hora, la añadida después
+  }
+  if (!ultima || !esInicioServicio(ultima.TEXTO)) return null;
+  const [d, m, a] = limpiaTexto(ultima.FECHA).split('/').map(Number);
+  if (!a) return null;
+  const dias = Math.round((new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate()) - new Date(a, m - 1, d)) / 86400000);
+  return dias >= 0 && dias <= 1 ? ultima : null;
+}
+
+// ---------- Matrículas de la ficha ----------
+/** [{ matricula: '0000XXX', detalle: 'Marca Modelo · Gris' }] de valores.DETALLE_VEHICULOS, sin repetir */
+export function matriculasDeFicha(valores) {
+  const vistas = new Set();
+  return (Array.isArray(valores?.DETALLE_VEHICULOS) ? valores.DETALLE_VEHICULOS : []).flatMap((v) => {
+    const mat = limpiaTexto(v?.MATRICULA).toUpperCase();
+    if (!mat || vistas.has(mat.replace(/[\s-]/g, ''))) return [];
+    vistas.add(mat.replace(/[\s-]/g, ''));
+    const det = [[v.MARCA, v.MODELO].map(limpiaTexto).filter(Boolean).join(' '), limpiaTexto(v.COLOR)].filter(Boolean).join(' · ');
+    return [{ matricula: mat, detalle: det }];
+  });
+}
+
+/** Inserta `trozo` en `texto` en la posición `pos`, con un espacio delante y detrás si hace falta. */
+export function insertarEnTexto(texto, pos, trozo) {
+  const antes = texto.slice(0, pos), despues = texto.slice(pos);
+  const pre = antes && !/\s$/.test(antes) ? ' ' : '';
+  const post = despues && !/^[\s.,;:)]/.test(despues) ? ' ' : (despues ? '' : ' ');
+  return { texto: antes + pre + trozo + post + despues, pos: (antes + pre + trozo + post).length };
 }
 
 // ---------- Notas de voz ----------

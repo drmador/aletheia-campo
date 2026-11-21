@@ -10,7 +10,7 @@ import * as L from './logica.js';
 import * as B from './bloqueo.js';
 import { h, vistaDatos, vistaVehiculos, vistaPropiedades, minimizar, CLAVES_FOTOS, NOMBRES_CAMPOS, lugarConMapa, linkMapa } from './vistas.js';
 
-const VERSION_APP = '1.8.0';
+const VERSION_APP = '1.9.0';
 const app = document.getElementById('app');
 const graph = crearGraph({ token: auth.token });
 
@@ -379,8 +379,24 @@ vistas.expediente = async ({ carpeta, pestana = 'historial' }) => {
   const nav = h('nav', { class: 'pestanas', role: 'tablist' });
   const cuerpo = h('div');
   const barraPend = h('div', { class: 'barra-pendientes', hidden: true });
+  const avisoConflicto = h('div', { class: 'aviso-conflicto', hidden: true });
   main.before(nav);
-  main.append(barraPend, cuerpo);
+  main.append(avisoConflicto, barraPend, cuerpo);
+
+  // Copias en conflicto de OneDrive en la carpeta del expediente: solo se avisa, no se toca nada
+  async function revisarConflictos() {
+    try {
+      const hijos = await graph.hijos(carpeta.driveId, carpeta.id);
+      const nombres = L.copiasEnConflicto(hijos.filter((x) => x.file).map((x) => x.name));
+      avisoConflicto.hidden = !nombres.length;
+      if (!nombres.length) return;
+      const fecha = (n) => { const it = hijos.find((x) => x.name === n); return it?.lastModifiedDateTime ? new Date(it.lastModifiedDateTime).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' }) : ''; };
+      avisoConflicto.replaceChildren(
+        h('strong', {}, nombres.length === 1 ? '⚠ Hay una copia en conflicto en este expediente' : `⚠ Hay ${nombres.length} copias en conflicto en este expediente`),
+        h('ul', {}, nombres.map((n) => h('li', {}, n, h('span', { class: 'sub' }, ' · ' + fecha(n))))),
+        h('div', {}, 'OneDrive guardó dos versiones a la vez. Revísala en el PC: puede tener datos que no están en la ficha. La app no la toca.'));
+    } catch { /* el aviso es solo una ayuda */ }
+  }
   // «⏳ N pendientes · Reintentar ahora» (lo de este expediente que aún no está confirmado en OneDrive)
   const pintarBarra = async () => {
     const mias = (await pendientes.todos()).filter((p) => p.carpetaId === carpeta.id);
@@ -444,6 +460,7 @@ vistas.expediente = async ({ carpeta, pestana = 'historial' }) => {
       await cache.set('ficha:' + carpeta.id, ficha);
       estado(main, '');
       pintar();
+      revisarConflictos();
     } catch (e) {
       if (e instanceof auth.SesionCaducada) { ultimoErrorSesion = true; actualizarChip(); }
       estado(main, (ficha ? 'Mostrando la copia guardada. ' : '') + 'No se pudo leer de OneDrive: ' + e.message, 'error');
@@ -472,14 +489,20 @@ async function vistaHistorial(carpeta, valores) {
       : e.AUDIO && (L.limpiaTexto(e.AUDIO_ESTADO) === 'pendiente' || !L.limpiaTexto(e.TEXTO))
         ? h('div', { class: 'texto nota-voz' }, '🎙 Nota de voz pendiente de transcribir', e.AUDIO_DURACION ? h('span', { class: 'sub' }, ' · ' + duracionTexto(e.AUDIO_DURACION)) : null)
         : h('div', { class: 'texto' }, e.TEXTO || ''),
-    e.KM ? h('span', { class: 'etiqueta-km' }, `🚗 ${L.formatoKM(e.KM)} km`) : null,
+    e.KM ? h('span', { class: 'etiqueta-km' }, `🚗 ${L.formatoKM(e.KM)}\u00a0km`) : null,
     error ? h('p', { class: 'sub' }, error) : null);
-  const out = [h('div', { class: 'botones' },
+  // ¿Hay un servicio iniciado sin finalizar? (con lo de la ficha y lo pendiente de subir)
+  const abierto = L.servicioAbierto([...(Array.isArray(valores?.HISTORIAL) ? valores.HISTORIAL : []), ...[...pend].reverse().map((p) => p.entrada)]);
+  const out = [];
+  if (abierto) out.push(h('div', { class: 'servicio-abierto' },
+    h('div', {}, h('strong', {}, `▶ Servicio iniciado a las ${abierto.HORA}`), abierto.FECHA !== L.fechaES() ? ` del ${abierto.FECHA}` : '', abierto.KM ? ` · 🚗\u00a0${L.formatoKM(abierto.KM)}\u00a0km` : ''),
+    h('button', { class: 'boton', type: 'button', onclick: () => ir('nuevaEntrada', { carpeta, tipo: 'fin' }) }, '■ Finalizar servicio')));
+  out.push(h('div', { class: 'botones' },
     h('button', { class: 'boton', onclick: () => ir('nuevaEntrada', { carpeta }) }, '＋ Nueva entrada'),
     h('button', { class: 'boton grabar', onclick: () => ir('notaVoz', { carpeta }) }, '🎙 Nota de voz')),
   h('div', { class: 'botones servicio' },
     h('button', { class: 'boton sec', onclick: () => ir('nuevaEntrada', { carpeta, tipo: 'inicio' }) }, '▶ Inicio de servicio'),
-    h('button', { class: 'boton sec', onclick: () => ir('nuevaEntrada', { carpeta, tipo: 'fin' }) }, '■ Fin de servicio'))];
+    h('button', { class: 'boton sec', onclick: () => ir('nuevaEntrada', { carpeta, tipo: 'fin' }) }, '■ Fin de servicio')));
   for (const p of pend) {
     const t = tarjeta(p.audio ? { ...p.entrada, AUDIO: p.audio.nombre, AUDIO_ESTADO: 'pendiente', AUDIO_DURACION: p.audio.duracion, _audioSinSubir: !p.audio.ruta } : p.entrada, { pendiente: true, error: p.error });
     if (p.audio) {
@@ -703,6 +726,19 @@ vistas.nuevaEntrada = async ({ carpeta, tipo }) => {
   km.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); guardarEntrada(true); } });
 
   const campoKm = [h('label', {}, 'Km del coche (opcional)'), km];
+
+  // Matrículas de los vehículos de la ficha: un toque las escribe en la descripción
+  const fichaGuardada = await cache.get('ficha:' + carpeta.id);
+  const mats = L.matriculasDeFicha(fichaGuardada?.obj?.valores);
+  const filaMatriculas = mats.length ? [h('div', { class: 'matriculas' },
+    h('span', { class: 'sub' }, 'Vehículos de la ficha (toca para escribir la matrícula):'),
+    h('div', { class: 'chips' }, mats.map((m) => h('button', { type: 'button', class: 'chip-mat', onclick: () => {
+      const pos = document.activeElement === texto ? texto.selectionStart : (ultimaPos ?? texto.value.length);
+      const r = L.insertarEnTexto(texto.value, pos, m.matricula);
+      texto.value = r.texto; texto.focus(); texto.setSelectionRange(r.pos, r.pos); ultimaPos = r.pos;
+    } }, h('span', { class: 'matricula' }, m.matricula), m.detalle ? h('span', { class: 'sub' }, ' ' + m.detalle) : null))))] : [];
+  let ultimaPos = null;
+  texto.addEventListener('blur', () => { ultimaPos = texto.selectionStart; });
   main.append(
     // En los botones rápidos, lo primero es pedir los km (con «Saltar» para no ponerlos)
     ...(rapida ? [...campoKm, h('div', { class: 'botones' },
@@ -713,6 +749,7 @@ vistas.nuevaEntrada = async ({ carpeta, tipo }) => {
     h('div', { class: 'botones' }, h('button', { class: 'boton sec', type: 'button', onclick: gps }, '📍 Ubicación actual')),
     notaGps, h('p'),
     h('label', {}, rapida ? 'Descripción (puedes añadir más texto)' : 'Descripción'), texto,
+    ...filaMatriculas,
     ...(rapida ? [] : campoKm),
     h('label', {}, 'Fotos'),
     h('div', { class: 'botones' },
