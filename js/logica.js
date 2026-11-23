@@ -197,6 +197,96 @@ export function insertarEnTexto(texto, pos, trozo) {
   return { texto: antes + pre + trozo + post + despues, pos: (antes + pre + trozo + post).length };
 }
 
+// ---------- Hora (y lugar) de una foto ----------
+/**
+ * Lee del JPEG la fecha en que se hizo la foto (EXIF DateTimeOriginal, o DateTime) y,
+ * si la tiene, su posición GPS. Todo en el móvil: la foto no sale de aquí.
+ * Devuelve { fecha: Date | null, gps: { lat, lon } | null }.
+ */
+export function leerExif(buffer) {
+  const sin = { fecha: null, gps: null };
+  try {
+    const v = new DataView(buffer);
+    if (v.byteLength < 4 || v.getUint16(0) !== 0xffd8) return sin;
+    let o = 2;
+    while (o + 4 <= v.byteLength) {
+      if (v.getUint8(o) !== 0xff) return sin;
+      const marca = v.getUint8(o + 1), largo = v.getUint16(o + 2);
+      if (marca === 0xda || marca === 0xd9) return sin;            // empiezan los datos de imagen: no hay EXIF
+      if (marca === 0xe1 && v.getUint32(o + 4) === 0x45786966) {    // "Exif"
+        const t = o + 10;                                           // cabecera TIFF
+        const le = v.getUint16(t) === 0x4949;
+        const u16 = (p) => v.getUint16(p, le), u32 = (p) => v.getUint32(p, le);
+        const ascii = (p, n) => { let r = ''; for (let i = 0; i < n; i++) { const c = v.getUint8(p + i); if (!c) break; r += String.fromCharCode(c); } return r; };
+        const leerIFD = (p) => {
+          const out = {}; const n = u16(t + p);
+          for (let i = 0; i < n; i++) {
+            const e = t + p + 2 + i * 12, tag = u16(e), tipo = u16(e + 2), cuenta = u32(e + 4);
+            const tam = ({ 1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 7: 1, 9: 4, 10: 8 })[tipo] || 1;
+            const pos = cuenta * tam > 4 ? t + u32(e + 8) : e + 8;
+            if (tipo === 2) out[tag] = ascii(pos, cuenta);
+            else if (tipo === 3) out[tag] = u16(pos);
+            else if (tipo === 4) out[tag] = u32(pos);
+            else if (tipo === 5) out[tag] = Array.from({ length: cuenta }, (_, k) => u32(pos + k * 8) / (u32(pos + k * 8 + 4) || 1));
+          }
+          return out;
+        };
+        const ifd0 = leerIFD(u32(t + 4));
+        const exif = ifd0[0x8769] ? leerIFD(ifd0[0x8769]) : {};
+        const gpsI = ifd0[0x8825] ? leerIFD(ifd0[0x8825]) : {};
+        const m = String(exif[0x9003] || exif[0x9004] || ifd0[0x0132] || '').match(/^(\d{4}):(\d\d):(\d\d) (\d\d):(\d\d):(\d\d)/);
+        const fecha = m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : null;
+        let gps = null;
+        if (Array.isArray(gpsI[2]) && Array.isArray(gpsI[4])) {
+          const g = (x) => x[0] + (x[1] || 0) / 60 + (x[2] || 0) / 3600;
+          const lat = g(gpsI[2]) * (/s/i.test(gpsI[1] || '') ? -1 : 1), lon = g(gpsI[4]) * (/w/i.test(gpsI[3] || '') ? -1 : 1);
+          if (Number.isFinite(lat) && Number.isFinite(lon) && (lat || lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) gps = { lat, lon };
+        }
+        return { fecha: fecha && !isNaN(fecha) && fecha.getFullYear() > 2000 ? fecha : null, gps };
+      }
+      o += 2 + largo;
+    }
+  } catch { /* foto sin EXIF legible */ }
+  return sin;
+}
+
+/** Fecha y hora en el nombre del archivo: «20261120_091205.jpg», «IMG_20261120-091205», «2026-11-20 09-12-05»… */
+export function fechaDeNombre(nombre) {
+  const m = String(nombre || '').match(/(20\d\d)[-_.]?(\d\d)[-_.]?(\d\d)[ _T-]?(\d\d)[-_.:h]?(\d\d)(?:[-_.:m]?(\d\d))?/);
+  if (!m) return null;
+  const [a, mes, d, h, mi, se] = m.slice(1).map((x) => Number(x || 0));
+  if (mes < 1 || mes > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || se > 59) return null;
+  const f = new Date(a, mes - 1, d, h, mi, se);
+  return isNaN(f) ? null : f;
+}
+
+// ---------- Resumen del día ----------
+/**
+ * Resumen de un día con las entradas de la ficha y las pendientes (en orden de creación):
+ * tramos de servicio (inicio → fin), km (mayor − menor, como el PC), nº de entradas y de fotos.
+ */
+export function resumenDia(entradas, fecha) {
+  const delDia = (entradas || []).map((e, i) => [e, i]).filter(([e]) => e && limpiaTexto(e.FECHA) === fecha)
+    .sort(([a, ia], [b, ib]) => ordenEntrada(a).localeCompare(ordenEntrada(b)) || ia - ib).map(([e]) => e);
+  if (!delDia.length) return null;
+  const min = (h) => { const [a, b] = limpiaTexto(h).split(':').map(Number); return a * 60 + (b || 0); };
+  const tramos = [];
+  let abierto = null;
+  for (const e of delDia) {
+    if (esInicioServicio(e.TEXTO)) { if (!abierto) abierto = e.HORA; }
+    else if (esFinServicio(e.TEXTO) && abierto) { tramos.push([abierto, e.HORA]); abierto = null; }
+  }
+  const minutos = tramos.reduce((s, [a, b]) => s + Math.max(0, min(b) - min(a)), 0);
+  const kms = delDia.map((e) => Number(limpiarKM(e.KM).km)).filter((n) => n > 0);
+  return {
+    entradas: delDia.length,
+    fotos: delDia.reduce((s, e) => s + (Array.isArray(e.FOTOS) ? e.FOTOS.length : 0), 0),
+    tramos, abiertoDesde: abierto, minutos,
+    kmDesde: kms.length >= 2 ? Math.min(...kms) : null, kmHasta: kms.length >= 2 ? Math.max(...kms) : null,
+  };
+}
+export const duracionHM = (min) => `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')} min`;
+
 // ---------- Notas de voz ----------
 export const CARPETA_AUDIOS = 'Audios';
 /** "Nota 2026-11-03 10-42-15.m4a" (fecha y hora de inicio, con segundos) */

@@ -10,7 +10,7 @@ import * as L from './logica.js';
 import * as B from './bloqueo.js';
 import { h, vistaDatos, vistaVehiculos, vistaPropiedades, minimizar, CLAVES_FOTOS, NOMBRES_CAMPOS, lugarConMapa, linkMapa } from './vistas.js';
 
-const VERSION_APP = '1.9.0';
+const VERSION_APP = '1.10.0';
 const app = document.getElementById('app');
 const graph = crearGraph({ token: auth.token });
 
@@ -24,13 +24,29 @@ const vistas = {};
 const sinAcentos = (s) => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 const enLinea = () => navigator.onLine;
 
+// ---- Modo noche discreto (preferencia de este móvil: se guarda en el navegador)
+const leerNoche = () => { try { return localStorage.getItem('modoNoche') === '1'; } catch { return false; } };
+function aplicarNoche(si) {
+  document.documentElement.toggleAttribute('data-noche', si);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', si ? '#000000' : '#23395b');
+  document.querySelectorAll('.boton-noche').forEach((b) => { b.textContent = si ? '☀' : '🌙'; b.setAttribute('aria-label', si ? 'Quitar modo noche' : 'Modo noche'); });
+}
+function cambiarNoche() {
+  const si = !document.documentElement.hasAttribute('data-noche');
+  try { localStorage.setItem('modoNoche', si ? '1' : '0'); } catch { /* sin almacenamiento: dura hasta cerrar */ }
+  aplicarNoche(si);
+}
+aplicarNoche(leerNoche());
+
 function pantalla(titulo, { atras = false, acciones = [] } = {}, ...contenido) {
   const main = h('main', {}, ...contenido);
+  const noche = document.documentElement.hasAttribute('data-noche');
   app.replaceChildren(
     h('header', { class: 'barra' },
       atras ? h('button', { 'aria-label': 'Atrás', onclick: () => history.back() }, '←') : null,
       h('h1', {}, titulo),
-      ...acciones),
+      ...acciones,
+      h('button', { class: 'boton-noche', 'aria-label': noche ? 'Quitar modo noche' : 'Modo noche', onclick: cambiarNoche }, noche ? '☀' : '🌙')),
     main);
   window.scrollTo(0, 0);
   return main;
@@ -494,6 +510,16 @@ async function vistaHistorial(carpeta, valores) {
   // ¿Hay un servicio iniciado sin finalizar? (con lo de la ficha y lo pendiente de subir)
   const abierto = L.servicioAbierto([...(Array.isArray(valores?.HISTORIAL) ? valores.HISTORIAL : []), ...[...pend].reverse().map((p) => p.entrada)]);
   const out = [];
+  // Resumen de hoy (lo de la ficha + lo pendiente de subir)
+  const rd = L.resumenDia([...(Array.isArray(valores?.HISTORIAL) ? valores.HISTORIAL : []), ...[...pend].reverse().map((p) => p.entrada)], L.fechaES());
+  if (rd) {
+    const partes = [];
+    if (rd.tramos.length) partes.push('servicio ' + rd.tramos.map(([a, b]) => `${a}–${b}`).join(', ') + ` (${L.duracionHM(rd.minutos)})`);
+    if (rd.abiertoDesde) partes.push(`en curso desde las ${rd.abiertoDesde}`);
+    if (rd.kmDesde != null) partes.push(`${L.formatoKM(rd.kmDesde)} → ${L.formatoKM(rd.kmHasta)}\u00a0km (${L.formatoKM(rd.kmHasta - rd.kmDesde)}\u00a0km)`);
+    partes.push(`${rd.entradas} ${rd.entradas === 1 ? 'entrada' : 'entradas'}`, `${rd.fotos} ${rd.fotos === 1 ? 'foto' : 'fotos'}`);
+    out.push(h('div', { class: 'resumen-dia' }, h('strong', {}, 'Hoy: '), partes.join(' · ')));
+  }
   if (abierto) out.push(h('div', { class: 'servicio-abierto' },
     h('div', {}, h('strong', {}, `▶ Servicio iniciado a las ${abierto.HORA}`), abierto.FECHA !== L.fechaES() ? ` del ${abierto.FECHA}` : '', abierto.KM ? ` · 🚗\u00a0${L.formatoKM(abierto.KM)}\u00a0km` : ''),
     h('button', { class: 'boton', type: 'button', onclick: () => ir('nuevaEntrada', { carpeta, tipo: 'fin' }) }, '■ Finalizar servicio')));
@@ -617,7 +643,11 @@ function vistaPdf(carpeta) {
 async function ubicacionActual() {
   const pos = await new Promise((ok, mal) => navigator.geolocation.getCurrentPosition(ok, mal, { enableHighAccuracy: true, timeout: 20000, maximumAge: 30000 }));
   const { latitude: la, longitude: lo, accuracy } = pos.coords;
-  const gps = L.formatoGPS(la, lo);
+  return { texto: await direccionDe(la, lo), gps: L.formatoGPS(la, lo), accuracy };
+}
+
+/** Dirección aproximada de unas coordenadas (OpenStreetMap; solo se envían las coordenadas). '' si no. */
+async function direccionDe(la, lo) {
   const autom = (await kv.get('direccionAuto')) ?? true;
   if (autom && enLinea()) {
     try {
@@ -627,10 +657,18 @@ async function ubicacionActual() {
       const calle = [a.road || a.pedestrian || a.footway || a.square, a.house_number].filter(Boolean).join(' ');
       const sitio = a.city || a.town || a.village || a.municipality || a.county || '';
       const texto = [calle || a.neighbourhood || a.suburb, sitio].filter(Boolean).join(', ');
-      if (texto) return { texto, gps, accuracy };
+      if (texto) return texto;
     } catch { /* sin dirección: el lugar lo escribe el usuario */ }
   }
-  return { texto: '', gps, accuracy };
+  return '';
+}
+
+/** Cuándo (y dónde) se hizo una foto: EXIF del JPEG o, si no, la fecha del nombre del archivo. */
+async function datosDeFoto(file) {
+  let r = { fecha: null, gps: null };
+  try { if (/jpe?g/i.test(file.type) || /\.jpe?g$/i.test(file.name || '')) r = L.leerExif(await file.slice(0, 256 * 1024).arrayBuffer()); } catch { /* nada */ }
+  if (!r.fecha) r.fecha = L.fechaDeNombre(file.name);
+  return r;
 }
 
 function extension(file) {
@@ -688,10 +726,40 @@ vistas.nuevaEntrada = async ({ carpeta, tipo }) => {
     for (const file of lista) {
       const d = new Date();
       const nombre = L.nombreFotoMovil(d).replace(/\.jpg$/, '.' + extension(file));
-      fotos.push({ nombre, blob: file, pie: '', url: URL.createObjectURL(file) });
+      const f = { nombre, blob: file, pie: '', url: URL.createObjectURL(file) };
+      fotos.push(f);
+      datosDeFoto(file).then((dato) => { f.dato = dato; pintarSugerencia(); });
     }
     pintarFotos();
   };
+
+  // Si la foto se hizo en otro momento (galería, dash cam…), ofrecer su hora (y su lugar, si lo trae)
+  const sugerenciaFoto = h('div', { class: 'sugerencia-foto', hidden: true });
+  function pintarSugerencia() {
+    const conFecha = fotos.filter((f) => f.dato?.fecha).sort((a, b) => a.dato.fecha - b.dato.fecha);
+    const f = conFecha[0];
+    const [d, m, a] = fecha.value.split('/').map(Number), [hh, mm] = hora.value.split(':').map(Number);
+    const actual = new Date(a, (m || 1) - 1, d || 1, hh || 0, mm || 0);
+    const fm = f && new Date(f.dato.fecha.getFullYear(), f.dato.fecha.getMonth(), f.dato.fecha.getDate(), f.dato.fecha.getHours(), f.dato.fecha.getMinutes());
+    if (!f || Math.abs(fm - actual) < 60000) { sugerenciaFoto.hidden = true; return; }
+    const F = L.fechaES(f.dato.fecha), H = L.horaES(f.dato.fecha), g = f.dato.gps;
+    sugerenciaFoto.hidden = false;
+    sugerenciaFoto.replaceChildren(
+      h('div', {}, `📷 La foto se hizo el ${F} a las ${H}`, g ? ' y trae su posición GPS.' : '.'),
+      h('button', { class: 'boton sec', type: 'button', onclick: async () => {
+        fecha.value = F; hora.value = H;
+        if (g) {
+          gpsActual = L.formatoGPS(g.lat, g.lon);
+          notaGps.replaceChildren(`GPS de la foto: ${gpsActual}. `, h('button', { type: 'button', class: 'enlace', onclick: () => { gpsActual = null; notaGps.textContent = 'Sin coordenadas GPS en esta entrada.'; } }, 'Quitar GPS'));
+          if (!lugar.value.trim() || lugar.dataset.auto === '1') { lugar.value = ''; lugar.dataset.auto = '1'; const t = await direccionDe(g.lat, g.lon); if (t && lugar.dataset.auto === '1') lugar.value = t; }
+        } else if (gpsActual) {
+          notaGps.replaceChildren('⚠ Ojo: el GPS es el de ahora, no el de la foto. ', h('button', { type: 'button', class: 'enlace', onclick: () => { gpsActual = null; notaGps.textContent = 'Sin coordenadas GPS en esta entrada.'; } }, 'Quitar GPS'));
+        }
+        sugerenciaFoto.hidden = true;
+      } }, g ? 'Usar la hora y el lugar de la foto' : 'Usar la hora de la foto'));
+  }
+  fecha.addEventListener('input', pintarSugerencia);
+  hora.addEventListener('input', pintarSugerencia);
   camara.addEventListener('change', () => { añadir(camara.files); camara.value = ''; });
   galeria.addEventListener('change', () => { añadir(galeria.files); galeria.value = ''; });
 
@@ -755,7 +823,7 @@ vistas.nuevaEntrada = async ({ carpeta, tipo }) => {
     h('div', { class: 'botones' },
       h('button', { class: 'boton sec', type: 'button', onclick: () => camara.click() }, '📷 Cámara'),
       h('button', { class: 'boton sec', type: 'button', onclick: () => galeria.click() }, '🖼 Galería')),
-    camara, galeria, rejilla, h('p'),
+    camara, galeria, rejilla, sugerenciaFoto, h('p'),
     guardar,
     h('p', { class: 'sub' }, enLinea() ? 'Se subirá a OneDrive al guardar.' : 'Sin conexión: se guarda en el móvil y se subirá sola cuando vuelva la cobertura.'));
   gps();

@@ -174,3 +174,26 @@ input.km { font-size: 1.4rem; font-variant-numeric: tabular-nums; letter-spacing
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
 .chip-mat { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--linea); background: var(--papel); color: var(--tinta); border-radius: 10px; padding: 6px 10px; font: inherit; min-height: 44px; }
 .chip-mat .matricula { font-size: .95rem; padding: 0 6px; }
+
+/* ---- Hora de la foto, resumen del día ---- */
+.sugerencia-foto { border: 1px solid var(--marca); border-radius: 10px; padding: 10px 12px; margin: 10px 0; background: var(--papel); }
+.sugerencia-foto .boton { margin-top: 8px; width: 100%; }
+.resumen-dia { font-size: .88rem; color: var(--suave); background: var(--papel); border: 1px solid var(--linea); border-radius: 10px; padding: 8px 12px; margin-bottom: 10px; }
+.resumen-dia strong { color: var(--tinta); }
+
+/* ---- Modo noche discreto: casi negro, letras tenues y cálidas, sin blancos ---- */
+:root[data-noche] {
+  --fondo: #000; --papel: #070605; --tinta: #a88f72; --suave: #6f5f4c; --linea: #1d1812;
+  --marca: #7a5e3e; --marca-2: #5c4426; --ok: #4d6b4a; --error: #a3443a; color-scheme: dark;
+}
+:root[data-noche] header.barra { background: #000; color: #a88f72; border-bottom: 1px solid #1d1812; }
+:root[data-noche] header.barra button { color: #a88f72; }
+:root[data-noche] button.boton, :root[data-noche] a.boton { background: #1a140d; color: #b39577; border: 1px solid #2a2016; }
+:root[data-noche] button.boton.grabar, :root[data-noche] button.boton.peligro { background: #3a1410; color: #c08a7c; }
+:root[data-noche] nav.pestanas button[aria-selected="true"] { background: #2a2016; color: #c4a483; border-color: #3a2c1e; }
+:root[data-noche] img, :root[data-noche] .rejilla .mini { filter: brightness(.55); }
+:root[data-noche] .matricula { border-color: #6f5f4c; }
+:root[data-noche] .barra-pendientes, :root[data-noche] .etiqueta, :root[data-noche] .audio-pendiente { background: #3a2c16; color: #c4a483; }
+:root[data-noche] .chip-pend { background: #3a2c16; color: #c4a483; }
+:root[data-noche] input, :root[data-noche] textarea { background: #0b0907; color: #b39577; border-color: #2a2016; }
+:root[data-noche] .visor img { filter: brightness(.7); }
