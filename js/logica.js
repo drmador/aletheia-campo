@@ -188,16 +188,31 @@ export function servicioAbierto(entradas, ahora = new Date()) {
 }
 
 // ---------- Matrículas de la ficha ----------
-/** [{ matricula: '0000XXX', detalle: 'Marca Modelo · Gris' }] de valores.DETALLE_VEHICULOS, sin repetir */
+/**
+ * Matrículas para escribir con un toque: las de los vehículos de la ficha y las de los familiares
+ * (campo «Vehículo / matrícula»). [{ matricula, detalle, de? }], sin repetir.
+ */
+const RE_MATRICULA = /\b(\d{4}\s?-?[B-DF-HJ-NP-TV-Z]{3}|[A-Z]{1,2}\s?-?\d{4}\s?-?[A-Z]{1,2})\b/i;
 export function matriculasDeFicha(valores) {
   const vistas = new Set();
-  return (Array.isArray(valores?.DETALLE_VEHICULOS) ? valores.DETALLE_VEHICULOS : []).flatMap((v) => {
+  const nueva = (m) => { const k = m.replace(/[\s-]/g, '').toUpperCase(); if (!k || vistas.has(k)) return false; vistas.add(k); return true; };
+  const propias = (Array.isArray(valores?.DETALLE_VEHICULOS) ? valores.DETALLE_VEHICULOS : []).flatMap((v) => {
     const mat = limpiaTexto(v?.MATRICULA).toUpperCase();
-    if (!mat || vistas.has(mat.replace(/[\s-]/g, ''))) return [];
-    vistas.add(mat.replace(/[\s-]/g, ''));
+    if (!mat || !nueva(mat)) return [];
     const det = [[v.MARCA, v.MODELO].map(limpiaTexto).filter(Boolean).join(' '), limpiaTexto(v.COLOR)].filter(Boolean).join(' · ');
     return [{ matricula: mat, detalle: det }];
   });
+  const ajenas = (Array.isArray(valores?.OTROS_FAMILIARES) ? valores.OTROS_FAMILIARES : []).flatMap((p) => {
+    const txt = limpiaTexto(p?.VEHICULO);
+    if (!txt) return [];
+    const m = txt.match(RE_MATRICULA);
+    const mat = (m ? m[1] : txt).toUpperCase();
+    if (!nueva(mat)) return [];
+    const quien = [limpiaTexto(p.RELACION), [p.NOMBRE, p.APELLIDOS].map(limpiaTexto).filter(Boolean).join(' ')].filter(Boolean).join(' · ');
+    const resto = m ? limpiaTexto(txt.replace(m[1], ' ')).replace(/\s+/g, ' ').replace(/^[\s,·-]+|[\s,·-]+$/g, '') : '';
+    return [{ matricula: mat, detalle: resto, de: quien || 'familiar' }];
+  });
+  return [...propias, ...ajenas];
 }
 
 /** Inserta `trozo` en `texto` en la posición `pos`, con un espacio delante y detrás si hace falta. */

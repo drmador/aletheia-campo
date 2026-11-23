@@ -202,3 +202,20 @@ input.km { font-size: 1.4rem; font-variant-numeric: tabular-nums; letter-spacing
 .sublista { border-top: 1px solid var(--linea); padding-top: 6px; }
 .subtarjeta { border: 1px solid var(--linea); border-radius: 10px; padding: 8px 10px; margin: 6px 0 8px; }
 .subtarjeta .dato:first-of-type { border-top: 0; }
+
+/* ---- Identificación, vehículos abreviados, colaborador ---- */
+.identificacion { border: 2px solid var(--marca); }
+.ident-cuerpo { display: flex; gap: 12px; align-items: flex-start; }
+.ident-foto { flex: 0 0 110px; }
+.ident-foto .rejilla { grid-template-columns: 1fr; }
+.ident-foto .rejilla .mini { aspect-ratio: 3 / 4; }
+.ident-foto .pie-foto { display: none; }
+.ident-datos { flex: 1; min-width: 0; }
+.ident-nombre { font-weight: 700; font-size: 1.1rem; }
+.ident-linea { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--linea); word-break: break-word; }
+.ident-linea .matricula { font-size: .9rem; margin: 0 4px 4px 0; }
+details.mas-datos { margin-top: 8px; }
+details.mas-datos summary { cursor: pointer; color: var(--marca); font-weight: 600; padding: 8px 0; }
+.etiqueta-colab { display: inline-block; font-size: .78rem; font-weight: 700; border-radius: 6px; padding: 1px 8px; margin: 6px 6px 2px 0; background: #e8eefb; color: #23395b; }
+:root[data-noche] .etiqueta-colab { background: #1a140d; color: #b39577; }
+.chip-mat .de { font-style: italic; }

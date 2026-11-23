@@ -88,13 +88,16 @@ export function vistaDatos(valores, pintarFotos, abrirPdf) {
   const tarjetas = [];
   const usadosAparte = new Set(); // datos que ya salen junto a otro (tipo y notas de una dirección)
   const ctx = { pintarFotos, abrirPdf };
+  // Lo primero: la tarjeta de identificación (lo que se mira en plena vigilancia)
+  const identificacion = tarjetaIdentificacion(valores, pintarFotos);
+  if (identificacion) tarjetas.push(identificacion);
   for (const sec of CAMPOS.secciones) {
     if (['Vehículos', 'Historial'].includes(sec.titulo)) continue;
     const consumidos = new Set();
     // Una dirección con valor «se come» su población y provincia (salen en la misma fila)
     for (const c of sec.campos)
       if (c.consulta_mapa && !vacio(valores[c.etiqueta])) c.consulta_mapa.forEach((k) => k !== c.etiqueta && consumidos.add(k));
-    for (const c of sec.campos) for (const suf of SUFIJOS_DIRECCION) usadosAparte.add(c.etiqueta + suf);
+    for (const c of sec.campos) for (const suf of SUFIJOS_DIRECCION) { usadosAparte.add(c.etiqueta + suf); if (c.consulta_mapa) consumidos.add(c.etiqueta + suf); }
 
     const filas = [];
     let fotoCabecera = null;
@@ -104,7 +107,7 @@ export function vistaDatos(valores, pintarFotos, abrirPdf) {
       if (c.tipo === 'imagen' || c.tipo === 'galeria') {
         const pie = c.etiqueta === 'FOTO_ADICIONAL_1' ? texto(valores.TITULO_FOTO_1) : '';
         const nodo = pintarFotos(fotosDe(v, pie));
-        if (c.etiqueta === 'FOTO_INVESTIGADO') fotoCabecera = nodo;
+        if (c.etiqueta === 'FOTO_INVESTIGADO') { if (!identificacion) fotoCabecera = nodo; }
         else filas.push(fila(c.texto, nodo));
         continue;
       }
@@ -123,7 +126,8 @@ export function vistaDatos(valores, pintarFotos, abrirPdf) {
         const resto = (c.consulta_mapa || []).filter((k) => k !== c.etiqueta).map((k) => texto(valores[k])).filter(Boolean);
         const segunda = resto.length === 2 ? `${resto[0]} (${resto[1]})` : resto.join(', ');
         // Tipo, «de quién» y notas de la dirección (datos del programa 7.x), debajo de la dirección
-        const extra = [texto(valores[c.etiqueta + '_TIPO']), texto(valores[c.etiqueta + '_DE']) ? 'De: ' + texto(valores[c.etiqueta + '_DE']) : ''].filter(Boolean).join(' · ');
+        const de = textoPersona(valores[c.etiqueta + '_DE']);
+        const extra = [texto(valores[c.etiqueta + '_TIPO']), de ? 'De: ' + de : ''].filter(Boolean).join(' · ');
         const notas = texto(valores[c.etiqueta + '_NOTAS']);
         filas.push(fila(c.texto, texto(v), segunda ? h('div', { class: 'sub' }, segunda) : null, linkMapa(consultaMapa(c, valores, v)),
           extra ? h('div', { class: 'sub' }, extra) : null, notas ? h('div', { class: 'sub' }, notas) : null));
@@ -143,7 +147,6 @@ export function vistaDatos(valores, pintarFotos, abrirPdf) {
     tarjetas.push(h('section', { class: 'tarjeta' }, h('h3', {}, 'Vehículos'),
       lista.map((veh) => h('div', { class: 'subtarjeta' },
         h('div', { class: 'titulo-item' }, veh.MATRICULA ? h('span', { class: 'matricula' }, veh.MATRICULA) : null, ' ', [veh.MARCA, veh.MODELO].map(texto).filter(Boolean).join(' '), veh.COLOR ? h('span', { class: 'sub' }, ' · ' + veh.COLOR) : null),
-        veh.TITULAR ? h('div', { class: 'sub' }, 'Titular: ' + texto(veh.TITULAR)) : null,
         Array.isArray(veh.FOTOS) && veh.FOTOS.length ? pintarFotos(fotosDe(veh.FOTOS)) : null)),
       h('p', { class: 'sub' }, 'Todos los datos de cada vehículo, en la pestaña Vehículos.')));
   }
@@ -158,6 +161,44 @@ export function vistaDatos(valores, pintarFotos, abrirPdf) {
   }
   if (sueltos.length) tarjetas.push(h('section', { class: 'tarjeta' }, h('h3', {}, 'Otros datos'), sueltos.map(([k, v]) => fila(etiquetaCampo(k), valorConMapa(k, v)))));
   return tarjetas.length ? tarjetas : h('p', { class: 'vacio' }, 'La ficha no tiene datos.');
+}
+
+/** «¿De quién?» puede ser un nombre o una persona de la lista de familiares */
+function textoPersona(v) {
+  if (!v) return '';
+  if (typeof v === 'object') return [tituloItem(v), texto(v.RELACION)].filter(Boolean).join(' · ');
+  return texto(v);
+}
+
+/** Tarjeta de identificación: foto, nombre, edad, físico, domicilio habitual, matrículas y trabajo. */
+function tarjetaIdentificacion(v, pintarFotos) {
+  const nombre = [v.NOMBRE, v.APELLIDOS].map(texto).filter(Boolean).join(' ');
+  const edad = texto(v.EDAD) ? `${texto(v.EDAD)} años` : '';
+  const fisico = [['Estatura', v.ESTATURA], ['Peso', v.PESO], ['Pelo', v.COLOR_PELO], ['Complexión', v.MORFOLOGIA]]
+    .filter(([, x]) => texto(x)).map(([k, x]) => `${k}: ${texto(x)}`);
+  // Domicilio habitual (por su tipo) o, si no se ha marcado, el primero
+  let dom = null;
+  for (let i = 1; i <= 4; i++) if (texto(v[`DIRECCION_${i}`]) && /habitual/i.test(texto(v[`DIRECCION_${i}_TIPO`]))) { dom = i; break; }
+  if (!dom && texto(v.DIRECCION_1)) dom = 1;
+  const def = campo(`DIRECCION_${dom}`) || {};
+  const domTxt = dom ? [texto(v[`DIRECCION_${dom}`]), texto(v[`POBLACION_${dom}`])].filter(Boolean).join(', ') : '';
+  const mats = (Array.isArray(v.DETALLE_VEHICULOS) ? v.DETALLE_VEHICULOS : []).filter((x) => texto(x?.MATRICULA));
+  const trabajos = (Array.isArray(v.OTROS_TRABAJOS) ? v.OTROS_TRABAJOS : []).filter((x) => x && (texto(x.EMPRESA) || texto(x.HORARIO)))
+    .map((x) => [texto(x.EMPRESA), texto(x.CARGO), texto(x.HORARIO)].filter(Boolean).join(' · '));
+  if (!trabajos.length && texto(v.TRABAJO_EMPRESA)) trabajos.push(texto(v.TRABAJO_EMPRESA));
+  if (!nombre && !texto(v.FOTO_INVESTIGADO) && !fisico.length && !domTxt && !mats.length) return null;
+  return h('section', { class: 'tarjeta identificacion' },
+    h('h3', {}, 'Identificación'),
+    h('div', { class: 'ident-cuerpo' },
+      texto(v.FOTO_INVESTIGADO) ? h('div', { class: 'ident-foto' }, pintarFotos(fotosDe(v.FOTO_INVESTIGADO))) : null,
+      h('div', { class: 'ident-datos' },
+        nombre ? h('div', { class: 'ident-nombre' }, nombre) : null,
+        edad ? h('div', {}, edad) : null,
+        fisico.length ? h('div', { class: 'sub' }, fisico.join(' · ')) : null)),
+    domTxt ? h('div', { class: 'ident-linea' }, '🏠 ', domTxt, ' ', linkMapa(consultaMapa(def, v, v[`DIRECCION_${dom}`]))) : null,
+    mats.length ? h('div', { class: 'ident-linea' }, '🚗 ', mats.map((x) => h('span', { class: 'matricula' }, texto(x.MATRICULA))), ' ',
+      h('span', { class: 'sub' }, mats.map((x) => [x.MARCA, x.MODELO, x.COLOR].map(texto).filter(Boolean).join(' ')).join(' · '))) : null,
+    trabajos.length ? h('div', { class: 'ident-linea' }, '💼 ', trabajos.join(' | ')) : null);
 }
 
 /** Título de un elemento de una lista: nombre y apellidos, empresa, marca y modelo… */
@@ -206,11 +247,15 @@ function filasLista(item, def, ocultar = [], ctx = {}) {
 export function vistaVehiculos(valores, pintarFotos, abrirPdf) {
   const lista = Array.isArray(valores.DETALLE_VEHICULOS) ? valores.DETALLE_VEHICULOS : [];
   if (!lista.length) return h('p', { class: 'vacio' }, 'No hay vehículos en la ficha.');
-  return lista.map((veh) => h('section', { class: 'tarjeta' },
-    h('h3', {}, veh.MATRICULA ? h('span', { class: 'matricula' }, veh.MATRICULA) : 'Sin matrícula'),
-    h('p', { class: 'titulo-item' }, [veh.MARCA, veh.MODELO].filter(Boolean).join(' '), veh.COLOR ? h('span', { class: 'sub' }, ' · ' + veh.COLOR) : null),
-    filasLista(veh, DEF_VEHICULOS, ['MATRICULA', 'MARCA', 'MODELO', 'COLOR'], { abrirPdf }),
-    Array.isArray(veh.FOTOS) && veh.FOTOS.length ? pintarFotos(fotosDe(veh.FOTOS)) : null));
+  return lista.map((veh) => {
+    const resto = filasLista(veh, DEF_VEHICULOS, ['MATRICULA', 'MARCA', 'MODELO', 'COLOR'], { abrirPdf });
+    return h('section', { class: 'tarjeta' },
+      h('h3', {}, veh.MATRICULA ? h('span', { class: 'matricula' }, veh.MATRICULA) : 'Sin matrícula'),
+      h('p', { class: 'titulo-item' }, [veh.MARCA, veh.MODELO].filter(Boolean).join(' '), veh.COLOR ? h('span', { class: 'sub' }, ' · ' + veh.COLOR) : null),
+      Array.isArray(veh.FOTOS) && veh.FOTOS.length ? pintarFotos(fotosDe(veh.FOTOS)) : null,
+      // Titular, DGT, ITV, seguro…: solo si se pide (para no saturar)
+      resto.length ? h('details', { class: 'mas-datos' }, h('summary', {}, `Ver todos los datos (${resto.length})`), resto) : null);
+  });
 }
 
 export function vistaPropiedades(valores, pintarFotos) {

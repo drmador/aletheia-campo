@@ -1,6 +1,6 @@
 // GENERADO por herramientas/generar_campos.py a partir de campos.json. No editar a mano.
 export const CAMPOS = {
- "version": "5.6",
+ "version": "7.10",
  "pais_mapa": "España",
  "carpeta_fotos": "Imagenes/Aportaciones",
  "patron_expediente": "^(\\d+)\\s*-\\s*(EDP\\d+)",
@@ -138,6 +138,21 @@ export const CAMPOS = {
      "texto": "Provincia"
     },
     {
+     "etiqueta": "DIRECCION_1_TIPO",
+     "texto": "Tipo",
+     "tipo": "lista"
+    },
+    {
+     "etiqueta": "DIRECCION_1_DE",
+     "texto": "¿De quién?",
+     "tipo": "persona_familia"
+    },
+    {
+     "etiqueta": "DIRECCION_1_NOTAS",
+     "texto": "Notas",
+     "completo": true
+    },
+    {
      "etiqueta": "DIRECCION_2",
      "texto": "Dirección 2",
      "completo": true,
@@ -155,6 +170,21 @@ export const CAMPOS = {
     {
      "etiqueta": "PROVINCIA_2",
      "texto": "Provincia"
+    },
+    {
+     "etiqueta": "DIRECCION_2_TIPO",
+     "texto": "Tipo",
+     "tipo": "lista"
+    },
+    {
+     "etiqueta": "DIRECCION_2_DE",
+     "texto": "¿De quién?",
+     "tipo": "persona_familia"
+    },
+    {
+     "etiqueta": "DIRECCION_2_NOTAS",
+     "texto": "Notas",
+     "completo": true
     },
     {
      "etiqueta": "DIRECCION_3",
@@ -176,6 +206,21 @@ export const CAMPOS = {
      "texto": "Provincia"
     },
     {
+     "etiqueta": "DIRECCION_3_TIPO",
+     "texto": "Tipo",
+     "tipo": "lista"
+    },
+    {
+     "etiqueta": "DIRECCION_3_DE",
+     "texto": "¿De quién?",
+     "tipo": "persona_familia"
+    },
+    {
+     "etiqueta": "DIRECCION_3_NOTAS",
+     "texto": "Notas",
+     "completo": true
+    },
+    {
      "etiqueta": "DIRECCION_4",
      "texto": "Dirección 4",
      "completo": true,
@@ -193,6 +238,21 @@ export const CAMPOS = {
     {
      "etiqueta": "PROVINCIA_4",
      "texto": "Provincia"
+    },
+    {
+     "etiqueta": "DIRECCION_4_TIPO",
+     "texto": "Tipo",
+     "tipo": "lista"
+    },
+    {
+     "etiqueta": "DIRECCION_4_DE",
+     "texto": "¿De quién?",
+     "tipo": "persona_familia"
+    },
+    {
+     "etiqueta": "DIRECCION_4_NOTAS",
+     "texto": "Notas",
+     "completo": true
     },
     {
      "etiqueta": "PROPIEDADES_RESUMEN",
@@ -281,14 +341,18 @@ export const CAMPOS = {
      "completo": true
     },
     {
-     "etiqueta": "RRSS_1",
-     "texto": "RRSS 1",
+     "etiqueta": "REDES_SOCIALES",
+     "texto": "Redes sociales",
+     "tipo": "redes",
      "completo": true
     },
     {
+     "etiqueta": "RRSS_1",
+     "texto": "RRSS 1"
+    },
+    {
      "etiqueta": "RRSS_2",
-     "texto": "RRSS 2",
-     "completo": true
+     "texto": "RRSS 2"
     }
    ]
   },
@@ -296,33 +360,80 @@ export const CAMPOS = {
    "titulo": "Trabajo",
    "campos": [
     {
+     "etiqueta": "OTROS_TRABAJOS",
+     "texto": "Trabajos / empresas",
+     "tipo": "vehiculos",
+     "campos": [
+      {
+       "clave": "EMPRESA",
+       "texto": "Empresa"
+      },
+      {
+       "clave": "CARGO",
+       "texto": "Puesto / cargo"
+      },
+      {
+       "clave": "HORARIO",
+       "texto": "Horario"
+      },
+      {
+       "clave": "DIRECCION",
+       "texto": "Dirección",
+       "enlace_mapa": true
+      },
+      {
+       "clave": "TELEFONO_1",
+       "texto": "Teléfono"
+      },
+      {
+       "clave": "TELEFONO_2",
+       "texto": "Teléfono 2"
+      },
+      {
+       "clave": "EMAIL",
+       "texto": "Email"
+      },
+      {
+       "clave": "WEB",
+       "texto": "Web"
+      },
+      {
+       "clave": "OBSERVACIONES",
+       "texto": "Observaciones",
+       "tipo": "multilinea"
+      }
+     ],
+     "claves_titulo": [
+      "EMPRESA",
+      "CARGO"
+     ],
+     "nombre_item_pdf": "TRABAJO",
+     "texto_fotos": "Fotos del lugar de trabajo"
+    },
+    {
      "etiqueta": "TRABAJO_EMPRESA",
-     "texto": "Trabajo/Empresa",
-     "completo": true
+     "texto": "Trabajo/Empresa"
     },
     {
      "etiqueta": "TRABAJO_DIRECCION",
-     "texto": "Dirección",
-     "completo": true,
+     "texto": "Dirección del trabajo",
      "enlace_mapa": true
     },
     {
      "etiqueta": "TRABAJO_TELEFONO_1",
-     "texto": "Teléfono"
+     "texto": "Teléfono del trabajo"
     },
     {
      "etiqueta": "TRABAJO_TELEFONO_2",
-     "texto": "Teléfono 2"
+     "texto": "Teléfono 2 del trabajo"
     },
     {
      "etiqueta": "TRABAJO_WEB",
-     "texto": "Web",
-     "completo": true
+     "texto": "Web del trabajo"
     },
     {
      "etiqueta": "TRABAJO_EMAIL",
-     "texto": "Email",
-     "completo": true
+     "texto": "Email del trabajo"
     }
    ]
   },
@@ -438,6 +549,53 @@ export const CAMPOS = {
    "titulo": "Hij@",
    "campos": [
     {
+     "etiqueta": "OTROS_HIJOS",
+     "texto": "Hijos/as",
+     "tipo": "vehiculos",
+     "campos": [
+      {
+       "clave": "NOMBRE",
+       "texto": "Nombre"
+      },
+      {
+       "clave": "APELLIDOS",
+       "texto": "Apellidos"
+      },
+      {
+       "clave": "EDAD",
+       "texto": "Edad"
+      },
+      {
+       "clave": "TRABAJO_ESCUELA",
+       "texto": "Trabajo / Escuela"
+      },
+      {
+       "clave": "DIRECCION",
+       "texto": "Dirección",
+       "enlace_mapa": true
+      },
+      {
+       "clave": "TELEFONO_1",
+       "texto": "Teléfono"
+      },
+      {
+       "clave": "TELEFONO_2",
+       "texto": "Teléfono 2"
+      },
+      {
+       "clave": "OBSERVACIONES",
+       "texto": "Observaciones",
+       "tipo": "multilinea"
+      }
+     ],
+     "claves_titulo": [
+      "NOMBRE",
+      "APELLIDOS"
+     ],
+     "nombre_item_pdf": "HIJO/A",
+     "texto_fotos": "Fotografías"
+    },
+    {
      "etiqueta": "HIJO_1_NOMBRE",
      "texto": "Nombre"
     },
@@ -456,7 +614,6 @@ export const CAMPOS = {
     {
      "etiqueta": "HIJO_1_DIRECCION",
      "texto": "Dirección",
-     "completo": true,
      "enlace_mapa": true
     },
     {
@@ -471,6 +628,60 @@ export const CAMPOS = {
      "etiqueta": "FOTO_HIJO_1",
      "texto": "Fotografía",
      "tipo": "imagen"
+    }
+   ]
+  },
+  {
+   "titulo": "Familia y entorno",
+   "campos": [
+    {
+     "etiqueta": "OTROS_FAMILIARES",
+     "texto": "Familiares y personas del entorno",
+     "tipo": "vehiculos",
+     "campos": [
+      {
+       "clave": "RELACION",
+       "texto": "Relación",
+       "tipo": "lista"
+      },
+      {
+       "clave": "NOMBRE",
+       "texto": "Nombre"
+      },
+      {
+       "clave": "APELLIDOS",
+       "texto": "Apellidos"
+      },
+      {
+       "clave": "EDAD",
+       "texto": "Edad"
+      },
+      {
+       "clave": "DIRECCION",
+       "texto": "Dirección",
+       "enlace_mapa": true
+      },
+      {
+       "clave": "TELEFONO_1",
+       "texto": "Teléfono"
+      },
+      {
+       "clave": "VEHICULO",
+       "texto": "Vehículo / matrícula"
+      },
+      {
+       "clave": "OBSERVACIONES",
+       "texto": "Observaciones",
+       "tipo": "multilinea"
+      }
+     ],
+     "claves_titulo": [
+      "RELACION",
+      "NOMBRE",
+      "APELLIDOS"
+     ],
+     "nombre_item_pdf": "PERSONA",
+     "texto_fotos": "Fotografías"
     }
    ]
   },
@@ -496,6 +707,17 @@ export const CAMPOS = {
      "etiqueta": "INFO_ADICIONAL",
      "texto": "Información adicional",
      "tipo": "multilinea"
+    },
+    {
+     "etiqueta": "BAJA_PATOLOGIAS",
+     "texto": "Dolencia de la baja (solo si se conoce)",
+     "tipo": "patologias",
+     "completo": true
+    },
+    {
+     "etiqueta": "BAJA_PALABRAS",
+     "texto": "Otras actividades a vigilar (separadas por comas)",
+     "completo": true
     }
    ]
   },
@@ -524,6 +746,15 @@ export const CAMPOS = {
        "enlace_mapa": true
       },
       {
+       "clave": "GPS",
+       "texto": "Posición GPS (lat, lon)",
+       "completo": true
+      },
+      {
+       "clave": "KM",
+       "texto": "Km del coche (opcional)"
+      },
+      {
        "clave": "TEXTO",
        "texto": "Descripción",
        "tipo": "multilinea"
@@ -541,6 +772,9 @@ export const CAMPOS = {
   "AUT_FECHA",
   "AUT_INTERESADO",
   "AUT_LUGAR",
+  "AVISO_FAMILIA",
+  "BAJA_PALABRAS",
+  "BAJA_PATOLOGIAS",
   "CARPETA_EXPEDIENTE",
   "CLIENTE_APELLIDOS",
   "CLIENTE_DIRECCION",
@@ -564,6 +798,7 @@ export const CAMPOS = {
   "COLAB_PARTES",
   "COLAB_REF",
   "COLAB_RSNP",
+  "COLAB_SENTIDO",
   "COLAB_TIP",
   "COLOR_PELO",
   "CONTRATO_DESCRIPCION",
@@ -575,9 +810,21 @@ export const CAMPOS = {
   "CONTRATO_PRESUPUESTO",
   "DETALLE_VEHICULOS",
   "DIRECCION_1",
+  "DIRECCION_1_DE",
+  "DIRECCION_1_NOTAS",
+  "DIRECCION_1_TIPO",
   "DIRECCION_2",
+  "DIRECCION_2_DE",
+  "DIRECCION_2_NOTAS",
+  "DIRECCION_2_TIPO",
   "DIRECCION_3",
+  "DIRECCION_3_DE",
+  "DIRECCION_3_NOTAS",
+  "DIRECCION_3_TIPO",
   "DIRECCION_4",
+  "DIRECCION_4_DE",
+  "DIRECCION_4_NOTAS",
+  "DIRECCION_4_TIPO",
   "DNI_NIE",
   "DOC_LEGITIMACION_1",
   "DOC_LEGITIMACION_2",
@@ -627,8 +874,14 @@ export const CAMPOS = {
   "INFORME_MOTIVO",
   "INFORME_ORGANO",
   "INFORME_PDF_CLAVE",
+  "INFORME_RECORRIDO_CAPA",
+  "INFORME_RECORRIDO_MODO",
+  "INFORME_RECORRIDO_TABLA",
   "INFORME_REGISTRO",
   "INFORME_RESULTADOS",
+  "INFORME_RUTINA",
+  "INFORME_RUTINA_IMAGEN",
+  "INFORME_RUTINA_TEXTO",
   "INFORME_TIPO",
   "INFORME_VIDEO",
   "INFORME_VIDEOS",
@@ -642,6 +895,9 @@ export const CAMPOS = {
   "MORFOLOGIA",
   "NOMBRE",
   "NSS",
+  "OTROS_FAMILIARES",
+  "OTROS_HIJOS",
+  "OTROS_TRABAJOS",
   "PESO",
   "POBLACION_1",
   "POBLACION_2",
@@ -657,6 +913,7 @@ export const CAMPOS = {
   "PROVINCIA_2",
   "PROVINCIA_3",
   "PROVINCIA_4",
+  "REDES_SOCIALES",
   "RRSS_1",
   "RRSS_2",
   "TELEFONO_1",

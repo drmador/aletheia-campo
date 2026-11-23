@@ -13,7 +13,33 @@ import json, sys, os, re
 
 # Secciones de la ficha que se ven en el móvil (por su «titulo» en campos.json)
 SECCIONES_APP = ['Expediente', 'Datos personales', 'Direcciones', 'Contacto y RRSS', 'Trabajo',
-                 'Vehículos', 'Hij@', 'Antecedentes e info.', 'Historial']
+                 'Vehículos', 'Hij@', 'Familia y entorno', 'Antecedentes e info.', 'Historial']
+# Campos de versiones anteriores del programa: las fichas antiguas los siguen teniendo,
+# así que se añaden a su sección (al final) si el campos.json actual ya no los trae.
+LEGADO = {
+    'Trabajo': [
+        {'etiqueta': 'TRABAJO_EMPRESA', 'texto': 'Trabajo/Empresa'},
+        {'etiqueta': 'TRABAJO_DIRECCION', 'texto': 'Dirección del trabajo', 'enlace_mapa': True},
+        {'etiqueta': 'TRABAJO_TELEFONO_1', 'texto': 'Teléfono del trabajo'},
+        {'etiqueta': 'TRABAJO_TELEFONO_2', 'texto': 'Teléfono 2 del trabajo'},
+        {'etiqueta': 'TRABAJO_WEB', 'texto': 'Web del trabajo'},
+        {'etiqueta': 'TRABAJO_EMAIL', 'texto': 'Email del trabajo'},
+    ],
+    'Hij@': [
+        {'etiqueta': 'HIJO_1_NOMBRE', 'texto': 'Nombre'},
+        {'etiqueta': 'HIJO_1_APELLIDOS', 'texto': 'Apellidos'},
+        {'etiqueta': 'HIJO_1_EDAD', 'texto': 'Edad'},
+        {'etiqueta': 'HIJO_1_TRABAJO_ESCUELA', 'texto': 'Trabajo / Escuela'},
+        {'etiqueta': 'HIJO_1_DIRECCION', 'texto': 'Dirección', 'enlace_mapa': True},
+        {'etiqueta': 'HIJO_1_TELEFONO_1', 'texto': 'Teléfono'},
+        {'etiqueta': 'HIJO_1_TELEFONO_2', 'texto': 'Teléfono 2'},
+        {'etiqueta': 'FOTO_HIJO_1', 'texto': 'Fotografía', 'tipo': 'imagen'},
+    ],
+    'Contacto y RRSS': [
+        {'etiqueta': 'RRSS_1', 'texto': 'RRSS 1'},
+        {'etiqueta': 'RRSS_2', 'texto': 'RRSS 2'},
+    ],
+}
 # De la sección Expediente, solo estos campos
 EXPEDIENTE_SOLO = ['EXP_NUMERO', 'EXP_EDP', 'FECHA', 'FECHA_CIERRE', 'JUDICIALIZADO', 'JUDICIAL_PROCEDIMIENTO', 'JUDICIAL_FIN']
 # Claves de campos.json que se copian a cada campo
@@ -42,6 +68,9 @@ def main(origen, destino):
         campos = [c for c in s['campos'] if c.get('etiqueta') and c.get('tipo') not in ('subtitulo', 'boton', 'carpeta', 'imagen_fija')]
         if s['titulo'] == 'Expediente':
             campos = [c for c in campos if c['etiqueta'] in EXPEDIENTE_SOLO]
+        ya = {c['etiqueta'] for c in campos}
+        campos += [c for c in LEGADO.get(s['titulo'], []) if c['etiqueta'] not in ya]
+        todas += [c['etiqueta'] for c in LEGADO.get(s['titulo'], [])]
         secciones.append({'titulo': s['titulo'], 'campos': [limpia_campo(c) for c in campos]})
     datos = {
         'version': d.get('version_minima', ''),

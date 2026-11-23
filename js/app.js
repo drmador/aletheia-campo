@@ -10,7 +10,7 @@ import * as L from './logica.js';
 import * as B from './bloqueo.js';
 import { h, vistaDatos, vistaVehiculos, vistaPropiedades, minimizar, CLAVES_FOTOS, NOMBRES_CAMPOS, lugarConMapa, linkMapa } from './vistas.js';
 
-const VERSION_APP = '1.11.0';
+const VERSION_APP = '1.12.0';
 const app = document.getElementById('app');
 const graph = crearGraph({ token: auth.token });
 
@@ -521,6 +521,7 @@ async function vistaHistorial(carpeta, valores) {
         ? h('div', { class: 'texto nota-voz' }, '🎙 Nota de voz pendiente de transcribir', e.AUDIO_DURACION ? h('span', { class: 'sub' }, ' · ' + duracionTexto(e.AUDIO_DURACION)) : null)
         : h('div', { class: 'texto' }, e.TEXTO || ''),
     e.KM ? h('span', { class: 'etiqueta-km' }, `🚗 ${L.formatoKM(e.KM)}\u00a0km`) : null,
+    L.limpiaTexto(e.COLABORADOR) ? h('span', { class: 'etiqueta-colab' }, '👤 ' + L.limpiaTexto(e.COLABORADOR)) : null,
     error ? h('p', { class: 'sub' }, error) : null);
   // ¿Hay un servicio iniciado sin finalizar? (con lo de la ficha y lo pendiente de subir)
   const abierto = L.servicioAbierto([...(Array.isArray(valores?.HISTORIAL) ? valores.HISTORIAL : []), ...[...pend].reverse().map((p) => p.entrada)]);
@@ -819,7 +820,7 @@ vistas.nuevaEntrada = async ({ carpeta, tipo }) => {
       const pos = document.activeElement === texto ? texto.selectionStart : (ultimaPos ?? texto.value.length);
       const r = L.insertarEnTexto(texto.value, pos, m.matricula);
       texto.value = r.texto; texto.focus(); texto.setSelectionRange(r.pos, r.pos); ultimaPos = r.pos;
-    } }, h('span', { class: 'matricula' }, m.matricula), m.detalle ? h('span', { class: 'sub' }, ' ' + m.detalle) : null))))] : [];
+    } }, h('span', { class: 'matricula' }, m.matricula), m.detalle ? h('span', { class: 'sub' }, ' ' + m.detalle) : null, m.de ? h('span', { class: 'sub de' }, ' (' + m.de + ')') : null))))] : [];
   let ultimaPos = null;
   texto.addEventListener('blur', () => { ultimaPos = texto.selectionStart; });
   main.append(
