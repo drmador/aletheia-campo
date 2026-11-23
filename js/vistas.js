@@ -83,14 +83,18 @@ const fotosDe = (v, pie) => (Array.isArray(v) ? v : [v]).filter(Boolean).map((f)
  * @param valores  la ficha
  * @param pintarFotos  función (lista de {ruta, pie}) => nodo
  */
-export function vistaDatos(valores, pintarFotos) {
+const SUFIJOS_DIRECCION = ['_TIPO', '_DE', '_NOTAS'];
+export function vistaDatos(valores, pintarFotos, abrirPdf) {
   const tarjetas = [];
+  const usadosAparte = new Set(); // datos que ya salen junto a otro (tipo y notas de una dirección)
+  const ctx = { pintarFotos, abrirPdf };
   for (const sec of CAMPOS.secciones) {
     if (['Vehículos', 'Historial'].includes(sec.titulo)) continue;
     const consumidos = new Set();
     // Una dirección con valor «se come» su población y provincia (salen en la misma fila)
     for (const c of sec.campos)
       if (c.consulta_mapa && !vacio(valores[c.etiqueta])) c.consulta_mapa.forEach((k) => k !== c.etiqueta && consumidos.add(k));
+    for (const c of sec.campos) for (const suf of SUFIJOS_DIRECCION) usadosAparte.add(c.etiqueta + suf);
 
     const filas = [];
     let fotoCabecera = null;
@@ -104,6 +108,12 @@ export function vistaDatos(valores, pintarFotos) {
         else filas.push(fila(c.texto, nodo));
         continue;
       }
+      // Listas (familiares, otros hijos, otros trabajos…): una tarjetita por elemento, con sus fotos
+      if (Array.isArray(v)) {
+        if (v.some((x) => x && typeof x === 'object')) filas.push(h('div', { class: 'sublista' }, h('div', { class: 'k' }, c.texto), v.filter((x) => x && typeof x === 'object' && !vacio(x)).map((x) => subtarjeta(x, c, ctx))));
+        else filas.push(fila(c.texto, v.map(texto).filter(Boolean).join('\n')));
+        continue;
+      }
       if (c.tipo === 'casilla') {
         if (texto(v) !== 'Sí') continue;
         filas.push(fila(c.texto, c.texto_casilla ? `Sí · ${c.texto_casilla}` : 'Sí'));
@@ -112,24 +122,75 @@ export function vistaDatos(valores, pintarFotos) {
       if (c.consulta_mapa || c.enlace_mapa) {
         const resto = (c.consulta_mapa || []).filter((k) => k !== c.etiqueta).map((k) => texto(valores[k])).filter(Boolean);
         const segunda = resto.length === 2 ? `${resto[0]} (${resto[1]})` : resto.join(', ');
-        filas.push(fila(c.texto, texto(v), segunda ? h('div', { class: 'sub' }, segunda) : null, linkMapa(consultaMapa(c, valores, v))));
+        // Tipo, «de quién» y notas de la dirección (datos del programa 7.x), debajo de la dirección
+        const extra = [texto(valores[c.etiqueta + '_TIPO']), texto(valores[c.etiqueta + '_DE']) ? 'De: ' + texto(valores[c.etiqueta + '_DE']) : ''].filter(Boolean).join(' · ');
+        const notas = texto(valores[c.etiqueta + '_NOTAS']);
+        filas.push(fila(c.texto, texto(v), segunda ? h('div', { class: 'sub' }, segunda) : null, linkMapa(consultaMapa(c, valores, v)),
+          extra ? h('div', { class: 'sub' }, extra) : null, notas ? h('div', { class: 'sub' }, notas) : null));
         continue;
       }
       filas.push(fila(c.texto, valorBonito(c.etiqueta, v)));
     }
     if (filas.length || fotoCabecera)
       tarjetas.push(h('section', { class: 'tarjeta' }, h('h3', {}, sec.titulo), fotoCabecera ? h('div', { class: 'foto-cabecera' }, fotoCabecera) : null, filas));
+    // Los vehículos también en la ficha (resumidos, con sus fotos), como en la ficha del PC
+    if (sec.titulo === 'Trabajo' || (sec === CAMPOS.secciones.at(-1))) vehiculosEnFicha();
   }
-  // Campos que el programa no conoce todavía (por si se añaden en el futuro)
-  const otros = Object.entries(valores).filter(([k, v]) => !CONOCIDOS.has(k) && !APARTE.has(k) && !vacio(v) && typeof v !== 'object');
-  if (otros.length) tarjetas.push(h('section', { class: 'tarjeta' }, h('h3', {}, 'Otros datos'), otros.map(([k, v]) => fila(etiquetaCampo(k), valorBonito(k, v)))));
+  function vehiculosEnFicha() {
+    if (vehiculosEnFicha.hecho) return; vehiculosEnFicha.hecho = true;
+    const lista = (Array.isArray(valores.DETALLE_VEHICULOS) ? valores.DETALLE_VEHICULOS : []).filter((x) => x && !vacio(x));
+    if (!lista.length) return;
+    tarjetas.push(h('section', { class: 'tarjeta' }, h('h3', {}, 'Vehículos'),
+      lista.map((veh) => h('div', { class: 'subtarjeta' },
+        h('div', { class: 'titulo-item' }, veh.MATRICULA ? h('span', { class: 'matricula' }, veh.MATRICULA) : null, ' ', [veh.MARCA, veh.MODELO].map(texto).filter(Boolean).join(' '), veh.COLOR ? h('span', { class: 'sub' }, ' · ' + veh.COLOR) : null),
+        veh.TITULAR ? h('div', { class: 'sub' }, 'Titular: ' + texto(veh.TITULAR)) : null,
+        Array.isArray(veh.FOTOS) && veh.FOTOS.length ? pintarFotos(fotosDe(veh.FOTOS)) : null)),
+      h('p', { class: 'sub' }, 'Todos los datos de cada vehículo, en la pestaña Vehículos.')));
+  }
+  // Campos que la app aún no conoce (el programa del PC añade datos nuevos): se enseñan igualmente
+  const otros = Object.entries(valores).filter(([k, v]) => !CONOCIDOS.has(k) && !APARTE.has(k) && !usadosAparte.has(k) && !k.startsWith('_') && !k.includes('__') && !vacio(v));
+  const sueltos = otros.filter(([, v]) => typeof v !== 'object');
+  const listas = otros.filter(([, v]) => Array.isArray(v));
+  for (const [k, v] of listas) {
+    const objs = v.filter((x) => x && typeof x === 'object' && !vacio(x));
+    if (objs.length) tarjetas.push(h('section', { class: 'tarjeta' }, h('h3', {}, etiquetaCampo(k)), objs.map((x) => subtarjeta(x, { campos: [] }, ctx))));
+    else sueltos.push([k, v.map(texto).filter(Boolean).join('\n')]);
+  }
+  if (sueltos.length) tarjetas.push(h('section', { class: 'tarjeta' }, h('h3', {}, 'Otros datos'), sueltos.map(([k, v]) => fila(etiquetaCampo(k), valorConMapa(k, v)))));
   return tarjetas.length ? tarjetas : h('p', { class: 'vacio' }, 'La ficha no tiene datos.');
 }
 
+/** Título de un elemento de una lista: nombre y apellidos, empresa, marca y modelo… */
+function tituloItem(x) {
+  const nombre = [x.NOMBRE, x.APELLIDOS].map(texto).filter(Boolean).join(' ');
+  return nombre || texto(x.EMPRESA) || [x.MARCA, x.MODELO, x.MATRICULA].map(texto).filter(Boolean).join(' ') || texto(x.RED || x.TIPO || x.NOMBRE_RED || x.USUARIO) || '';
+}
+const subtituloItem = (x) => [x.RELACION, x.PARENTESCO, x.CARGO, x.EDAD ? `${texto(x.EDAD)} años` : ''].map(texto).filter(Boolean).join(' · ');
+
+function subtarjeta(x, def, ctx) {
+  const t = tituloItem(x), st = subtituloItem(x);
+  const ocultar = ['NOMBRE', 'APELLIDOS', 'RELACION', 'PARENTESCO', 'EDAD', ...(t && x.EMPRESA && !x.NOMBRE ? ['EMPRESA', 'CARGO'] : [])];
+  return h('div', { class: 'subtarjeta' },
+    t || st ? h('div', { class: 'titulo-item' }, t, st ? h('span', { class: 'sub' }, (t ? ' · ' : '') + st) : null) : null,
+    filasLista(x, def, ocultar, ctx),
+    Array.isArray(x.FOTOS) && x.FOTOS.length ? ctx.pintarFotos(fotosDe(x.FOTOS)) : null);
+}
+
+const ES_LUGAR = /DIRECCI|DOMICILIO|UBICACI|LUGAR/;
+const valorConMapa = (k, v) => (ES_LUGAR.test(String(k).toUpperCase()) && !/_(TIPO|DE|NOTAS)$/i.test(String(k)) && texto(v).length > 3 && !/^[a-z]:\\/i.test(texto(v))
+  ? h('span', {}, texto(v), ' ', linkMapa(consultaMapa({}, {}, v))) : valorBonito(k, v));
+
 // ---------------------------------------------------------------- listas (vehículos, fincas)
-function filasLista(item, def, ocultar = []) {
+function filasLista(item, def, ocultar = [], ctx = {}) {
   const out = [];
   const usadas = new Set(['FOTOS', ...ocultar]);
+  // Un PDF guardado en el PC (p. ej. el informe de la DGT): botón para abrirlo desde OneDrive
+  for (const [k, v] of Object.entries(item)) {
+    if (typeof v === 'string' && /\.pdf$/i.test(v.trim()) && ctx.abrirPdf) {
+      usadas.add(k);
+      out.push(fila(/DGT/i.test(k) ? 'Informe DGT (PDF)' : etiquetaCampo(k), h('button', { class: 'boton sec', type: 'button', onclick: () => ctx.abrirPdf(v.trim()) }, '📄 Abrir PDF')));
+    }
+  }
   for (const c of def.campos || []) {
     const k = c.clave || c.etiqueta;
     if (usadas.has(k)) continue;
@@ -138,17 +199,17 @@ function filasLista(item, def, ocultar = []) {
     if (vacio(v)) continue;
     out.push(fila(c.texto, c.enlace_mapa ? h('span', {}, texto(v), ' ', linkMapa(consultaMapa({}, {}, v))) : valorBonito(k, v)));
   }
-  for (const [k, v] of Object.entries(item)) if (!usadas.has(k) && !vacio(v) && typeof v !== 'object') out.push(fila(etiquetaCampo(k), valorBonito(k, v)));
+  for (const [k, v] of Object.entries(item)) if (!usadas.has(k) && !k.includes('__') && !vacio(v) && typeof v !== 'object' && !/\.pdf$/i.test(String(v))) out.push(fila(etiquetaCampo(k), valorConMapa(k, v)));
   return out;
 }
 
-export function vistaVehiculos(valores, pintarFotos) {
+export function vistaVehiculos(valores, pintarFotos, abrirPdf) {
   const lista = Array.isArray(valores.DETALLE_VEHICULOS) ? valores.DETALLE_VEHICULOS : [];
   if (!lista.length) return h('p', { class: 'vacio' }, 'No hay vehículos en la ficha.');
   return lista.map((veh) => h('section', { class: 'tarjeta' },
     h('h3', {}, veh.MATRICULA ? h('span', { class: 'matricula' }, veh.MATRICULA) : 'Sin matrícula'),
     h('p', { class: 'titulo-item' }, [veh.MARCA, veh.MODELO].filter(Boolean).join(' '), veh.COLOR ? h('span', { class: 'sub' }, ' · ' + veh.COLOR) : null),
-    filasLista(veh, DEF_VEHICULOS, ['MATRICULA', 'MARCA', 'MODELO', 'COLOR']),
+    filasLista(veh, DEF_VEHICULOS, ['MATRICULA', 'MARCA', 'MODELO', 'COLOR'], { abrirPdf }),
     Array.isArray(veh.FOTOS) && veh.FOTOS.length ? pintarFotos(fotosDe(veh.FOTOS)) : null));
 }
 
@@ -163,7 +224,7 @@ export function vistaPropiedades(valores, pintarFotos) {
     const titulo = claves.map((k) => texto(p[k])).filter(Boolean).join(' · ');
     out.push(h('section', { class: 'tarjeta' },
       h('h3', {}, `Finca ${i + 1}`, titulo ? h('span', { class: 'sub' }, ' · ' + titulo) : null),
-      filasLista(p, DEF_PROPIEDADES),
+      filasLista(p, DEF_PROPIEDADES, [], {}),
       Array.isArray(p.FOTOS) && p.FOTOS.length ? pintarFotos(fotosDe(p.FOTOS)) : null));
   });
   return out.length ? out : h('p', { class: 'vacio' }, 'No hay propiedades en la ficha.');

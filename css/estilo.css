@@ -197,3 +197,8 @@ input.km { font-size: 1.4rem; font-variant-numeric: tabular-nums; letter-spacing
 :root[data-noche] .chip-pend { background: #3a2c16; color: #c4a483; }
 :root[data-noche] input, :root[data-noche] textarea { background: #0b0907; color: #b39577; border-color: #2a2016; }
 :root[data-noche] .visor img { filter: brightness(.7); }
+
+/* ---- Listas de la ficha (familiares, otros trabajos…) ---- */
+.sublista { border-top: 1px solid var(--linea); padding-top: 6px; }
+.subtarjeta { border: 1px solid var(--linea); border-radius: 10px; padding: 8px 10px; margin: 6px 0 8px; }
+.subtarjeta .dato:first-of-type { border-top: 0; }

@@ -120,18 +120,29 @@ export function claveDescartada(e) {
   return k;
 }
 
-/** ¿El PC ha descartado (corregido o quitado) esta entrada? */
+/**
+ * ¿El PC ha descartado (corregido o quitado) esta entrada?
+ * `descartadas` es valores._DESCARTADAS tal como lo guarde el PC:
+ *  - una lista de claves (formato del encargo), o
+ *  - un apartado por campo, { "HISTORIAL": [...], "GALERIA_INVESTIGADO": [...] } (formato real del programa 7.x).
+ * Cada clave puede venir como lista o como texto JSON, y el texto puede estar en MAYÚSCULAS y SIN ESPACIOS,
+ * así que se compara «en limpio» (sin espacios, sin acentos, en mayúsculas).
+ */
+const canon = (t) => limpiaTexto(t).normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/\s+/g, '');
 export function estaDescartada(e, descartadas) {
-  if (!Array.isArray(descartadas) || !descartadas.length) return false;
-  const k = claveDescartada(e);
-  const n = (v, i) => (i === 3 ? primeros60(v) : i === 4 ? rutaRelativaLimpia(limpiaTexto(v)).toLowerCase() : limpiaTexto(v));
-  const kn = k.map(n);
-  return descartadas.some((d) => {
+  const lista = Array.isArray(descartadas) ? descartadas
+    : descartadas && typeof descartadas === 'object' ? (Array.isArray(descartadas.HISTORIAL) ? descartadas.HISTORIAL : []) : [];
+  if (!lista.length) return false;
+  const f = canon(e?.FECHA), hh = canon(e?.HORA), txt = canon(e?.TEXTO);
+  const audio = canon(rutaRelativaLimpia(limpiaTexto(e?.AUDIO)));
+  return lista.some((d) => {
     let l = d;
-    if (typeof l === 'string') { try { l = JSON.parse(l); } catch { return false; } }
-    if (!Array.isArray(l) || l.length < 4 || limpiaTexto(l[0]) !== 'h') return false;
-    for (let i = 1; i < 4; i++) if (n(l[i], i) !== kn[i]) return false;
-    if (l.length >= 5) return kn.length >= 5 && n(l[4], 4) === kn[4]; // la descartada tenía audio: tiene que ser ese audio
+    for (let i = 0; i < 2 && typeof l === 'string'; i++) { try { l = JSON.parse(l); } catch { return false; } }
+    if (!Array.isArray(l) || l.length < 4 || canon(l[0]) !== 'H') return false;
+    if (canon(l[1]) !== f || canon(l[2]) !== hh) return false;
+    const t = canon(l[3]);   // el PC guarda solo el principio del texto (60 caracteres)
+    if (!(t === txt || (t.length >= 20 && txt.startsWith(t)))) return false;
+    if (l.length >= 5) return !!audio && canon(rutaRelativaLimpia(String(l[4] ?? ''))) === audio; // era una nota de voz: tiene que ser esa
     return true;
   });
 }
@@ -625,9 +636,12 @@ export function recogerFotos(valores, claves = null, nombres = {}) {
   return out;
 }
 
-// "FECHA_NACIMIENTO" -> "Fecha nacimiento"
+// "FECHA_NACIMIENTO" -> "Fecha nacimiento"; "OTROS_FAMILIARES" -> "Otros familiares"; con tildes en las palabras habituales
+const TILDES = { direccion: 'dirección', relacion: 'relación', telefono: 'teléfono', vehiculo: 'vehículo', vehiculos: 'vehículos',
+  anio: 'año', poblacion: 'población', informacion: 'información', patologias: 'patologías', ubicacion: 'ubicación',
+  matricula: 'matrícula', titulo: 'título', numero: 'número', codigo: 'código', situacion: 'situación', descripcion: 'descripción' };
 export function etiquetaCampo(k) {
-  const s = String(k).replace(/_/g, ' ').toLowerCase().trim();
+  const s = String(k).replace(/_/g, ' ').toLowerCase().trim().split(/\s+/).map((p) => TILDES[p] || p).join(' ');
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 

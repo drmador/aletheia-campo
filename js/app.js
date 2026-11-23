@@ -10,7 +10,7 @@ import * as L from './logica.js';
 import * as B from './bloqueo.js';
 import { h, vistaDatos, vistaVehiculos, vistaPropiedades, minimizar, CLAVES_FOTOS, NOMBRES_CAMPOS, lugarConMapa, linkMapa } from './vistas.js';
 
-const VERSION_APP = '1.10.0';
+const VERSION_APP = '1.11.0';
 const app = document.getElementById('app');
 const graph = crearGraph({ token: auth.token });
 
@@ -441,13 +441,28 @@ vistas.expediente = async ({ carpeta, pestana = 'historial' }) => {
     if (pestana === 'historial') return cuerpo.replaceChildren(...(await vistaHistorial(carpeta, v)));
     if (pestana === 'pdf') return cuerpo.replaceChildren(vistaPdf(carpeta));
     if (!v) return cuerpo.replaceChildren(h('p', { class: 'vacio' }, enLinea() ? 'Cargando ficha…' : 'Esta ficha no está guardada en el móvil. Ábrela una vez con conexión.'));
-    if (pestana === 'datos') cuerpo.replaceChildren(...[vistaDatos(v, (fotos) => rejillaFotos(carpeta, fotos))].flat());
-    if (pestana === 'vehiculos') cuerpo.replaceChildren(...[vistaVehiculos(v, (fotos) => rejillaFotos(carpeta, fotos))].flat());
+    if (pestana === 'datos') cuerpo.replaceChildren(...[vistaDatos(v, (fotos) => rejillaFotos(carpeta, fotos), abrirPdf)].flat());
+    if (pestana === 'vehiculos') cuerpo.replaceChildren(...[vistaVehiculos(v, (fotos) => rejillaFotos(carpeta, fotos), abrirPdf)].flat());
     if (pestana === 'propiedades') cuerpo.replaceChildren(...[vistaPropiedades(v, (fotos) => rejillaFotos(carpeta, fotos))].flat());
     if (pestana === 'fotos') {
-      const fotos = L.recogerFotos(v, CLAVES_FOTOS, NOMBRES_CAMPOS);
+      const fotos = L.recogerFotos(v, null, NOMBRES_CAMPOS); // todas las fotos de la ficha (también las de datos nuevos del PC)
       cuerpo.replaceChildren(fotos.length ? rejillaFotos(carpeta, fotos) : h('p', { class: 'vacio' }, 'La ficha no tiene fotos.'));
     }
+  }
+
+  // Abrir un PDF de la ficha (p. ej. el informe de la DGT). Si la ruta es del PC («F:\\OneDrive\\…\\0440 - …\\Documentos\\…»),
+  // se busca la parte que está dentro de la carpeta del expediente y se abre desde OneDrive.
+  async function abrirPdf(ruta) {
+    const partes = String(ruta).replace(/\\/g, '/').split('/');
+    const i = partes.findIndex((p) => p.normalize('NFC').toLowerCase() === carpeta.name.normalize('NFC').toLowerCase());
+    const rel = L.esRutaWindows(ruta) ? (i >= 0 ? partes.slice(i + 1).join('/') : null) : L.rutaRelativaLimpia(ruta);
+    if (!rel) return estado(main, 'Ese PDF está fuera de la carpeta del expediente: solo se puede abrir en el PC.', 'aviso');
+    if (!enLinea()) return estado(main, 'Hace falta conexión para abrir el PDF.', 'aviso');
+    try {
+      const it = await graph.itemPorRuta(carpeta.driveId, carpeta.id, rel);
+      if (!it) return estado(main, 'No se encuentra en OneDrive: ' + rel, 'aviso');
+      window.open(it.webUrl, '_blank', 'noopener');
+    } catch (e) { estado(main, 'No se pudo abrir el PDF: ' + e.message, 'error'); }
   }
 
   async function cargar() {
