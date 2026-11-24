@@ -103,7 +103,10 @@ export function normalizarEntrada(e) {
   // Km del coche: solo si se anotaron, como texto y solo cifras
   const km = limpiarKM(e.KM);
   if (km.km) out.KM = km.km;
-  if (out.AUDIO || out.KM) out.ordenador = 'Móvil';
+  // Trayecto despacho ↔ servicio (solo para facturar: el PC no lo imprime)
+  const tr = tipoTrayecto(e);
+  if (tr && limpiaTexto(e.TRAYECTO)) out.TRAYECTO = tr;
+  if (out.AUDIO || out.KM || out.TRAYECTO) out.ordenador = 'Móvil';
   return out;
 }
 
@@ -165,6 +168,28 @@ export function copiasEnConflicto(nombres) {
     const n = nfc(x).toLowerCase();
     return /^informaci[oó]n\s+\d+\s*-\s*\S.*\.json$/.test(n) || /^registro de actividad\s+\d+\s*-\s*\S.*\.txt$/.test(n);
   });
+}
+
+// ---------- Trayecto despacho ↔ servicio ----------
+/** 'salida' | 'llegada' | null. Por la clave TRAYECTO (el PC acepta también «regreso» y «vuelta») o por el texto. */
+export function tipoTrayecto(e) {
+  const t = limpiaTexto(e?.TRAYECTO).toLowerCase();
+  if (t === 'salida') return 'salida';
+  if (['llegada', 'regreso', 'vuelta'].includes(t)) return 'llegada';
+  const x = limpiaTexto(e?.TEXTO).replace(/\s+/g, ' ');
+  if (/^salida del despacho/i.test(x)) return 'salida';
+  if (/^(llegada|regreso|vuelta) al despacho/i.test(x)) return 'llegada';
+  return null;
+}
+/** Si la última entrada de trayecto (hoy o ayer) es una SALIDA, la devuelve: falta registrar la llegada. */
+export function trayectoAbierto(entradas, ahora = new Date()) {
+  let ultima = null;
+  for (const e of entradas || []) if (e && tipoTrayecto(e) && (!ultima || ordenEntrada(e) >= ordenEntrada(ultima))) ultima = e;
+  if (!ultima || tipoTrayecto(ultima) !== 'salida') return null;
+  const [d, m, a] = limpiaTexto(ultima.FECHA).split('/').map(Number);
+  if (!a) return null;
+  const dias = Math.round((new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate()) - new Date(a, m - 1, d)) / 86400000);
+  return dias >= 0 && dias <= 1 ? ultima : null;
 }
 
 // ---------- Servicio abierto (inicio sin fin) ----------
@@ -304,11 +329,23 @@ export function resumenDia(entradas, fecha) {
   }
   const minutos = tramos.reduce((s, [a, b]) => s + Math.max(0, min(b) - min(a)), 0);
   const kms = delDia.map((e) => Number(limpiarKM(e.KM).km)).filter((n) => n > 0);
+  const km = (e) => Number(limpiarKM(e?.KM).km) || null;
+  const primero = (f) => delDia.find((e) => f(e) && km(e));
+  const ultimo = (f) => [...delDia].reverse().find((e) => f(e) && km(e));
+  // Facturables: de la salida del despacho a la llegada; si falta alguna, la mayor lectura menos la menor
+  const sal = primero((e) => tipoTrayecto(e) === 'salida'), lle = ultimo((e) => tipoTrayecto(e) === 'llegada');
+  const kmFacturables = sal && lle && km(lle) >= km(sal) ? km(lle) - km(sal) : kms.length >= 2 ? Math.max(...kms) - Math.min(...kms) : null;
+  // Durante el servicio (informativo: lo que se movió el investigado)
+  const ini = primero((e) => esInicioServicio(e.TEXTO)), fin = ultimo((e) => esFinServicio(e.TEXTO));
+  const kmServicio = ini && fin && km(fin) >= km(ini) ? km(fin) - km(ini) : null;
   return {
-    entradas: delDia.length,
+    entradas: delDia.filter((e) => !tipoTrayecto(e)).length,
     fotos: delDia.reduce((s, e) => s + (Array.isArray(e.FOTOS) ? e.FOTOS.length : 0), 0),
     tramos, abiertoDesde: abierto, minutos,
     kmDesde: kms.length >= 2 ? Math.min(...kms) : null, kmHasta: kms.length >= 2 ? Math.max(...kms) : null,
+    kmFacturables, kmServicio,
+    kmTrayecto: kmFacturables != null && kmServicio != null && sal && lle ? kmFacturables - kmServicio : null,
+    conTrayecto: !!(sal && lle),
   };
 }
 export const duracionHM = (min) => `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')} min`;

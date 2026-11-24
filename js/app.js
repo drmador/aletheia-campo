@@ -10,7 +10,7 @@ import * as L from './logica.js';
 import * as B from './bloqueo.js';
 import { h, vistaDatos, vistaVehiculos, vistaPropiedades, minimizar, CLAVES_FOTOS, NOMBRES_CAMPOS, lugarConMapa, linkMapa } from './vistas.js';
 
-const VERSION_APP = '1.12.0';
+const VERSION_APP = '1.13.0';
 const app = document.getElementById('app');
 const graph = crearGraph({ token: auth.token });
 
@@ -522,6 +522,7 @@ async function vistaHistorial(carpeta, valores) {
         : h('div', { class: 'texto' }, e.TEXTO || ''),
     e.KM ? h('span', { class: 'etiqueta-km' }, `🚗 ${L.formatoKM(e.KM)}\u00a0km`) : null,
     L.limpiaTexto(e.COLABORADOR) ? h('span', { class: 'etiqueta-colab' }, '👤 ' + L.limpiaTexto(e.COLABORADOR)) : null,
+    L.tipoTrayecto(e) && L.limpiaTexto(e.TRAYECTO) ? h('span', { class: 'etiqueta-colab' }, '🏢 Trayecto (solo para facturar)') : null,
     error ? h('p', { class: 'sub' }, error) : null);
   // ¿Hay un servicio iniciado sin finalizar? (con lo de la ficha y lo pendiente de subir)
   const abierto = L.servicioAbierto([...(Array.isArray(valores?.HISTORIAL) ? valores.HISTORIAL : []), ...[...pend].reverse().map((p) => p.entrada)]);
@@ -532,10 +533,17 @@ async function vistaHistorial(carpeta, valores) {
     const partes = [];
     if (rd.tramos.length) partes.push('servicio ' + rd.tramos.map(([a, b]) => `${a}–${b}`).join(', ') + ` (${L.duracionHM(rd.minutos)})`);
     if (rd.abiertoDesde) partes.push(`en curso desde las ${rd.abiertoDesde}`);
-    if (rd.kmDesde != null) partes.push(`${L.formatoKM(rd.kmDesde)} → ${L.formatoKM(rd.kmHasta)}\u00a0km (${L.formatoKM(rd.kmHasta - rd.kmDesde)}\u00a0km)`);
+    if (rd.kmFacturables != null) {
+      const det = [rd.kmServicio != null ? `servicio ${L.formatoKM(rd.kmServicio)}` : '', rd.kmTrayecto != null ? `trayecto ${L.formatoKM(rd.kmTrayecto)}` : ''].filter(Boolean).join(' · ');
+      partes.push(`🚗 ${rd.conTrayecto ? 'facturables ' : ''}${L.formatoKM(rd.kmFacturables)}\u00a0km` + (det ? ` (${det})` : ''));
+    }
     partes.push(`${rd.entradas} ${rd.entradas === 1 ? 'entrada' : 'entradas'}`, `${rd.fotos} ${rd.fotos === 1 ? 'foto' : 'fotos'}`);
     out.push(h('div', { class: 'resumen-dia' }, h('strong', {}, 'Hoy: '), partes.join(' · ')));
   }
+  const enRuta = L.trayectoAbierto([...(Array.isArray(valores?.HISTORIAL) ? valores.HISTORIAL : []), ...[...pend].reverse().map((p) => p.entrada)]);
+  if (enRuta && !abierto) out.push(h('div', { class: 'servicio-abierto en-ruta' },
+    h('div', {}, h('strong', {}, `🏢 Saliste del despacho a las ${enRuta.HORA}`), enRuta.FECHA !== L.fechaES() ? ` del ${enRuta.FECHA}` : '', enRuta.KM ? ` · 🚗\u00a0${L.formatoKM(enRuta.KM)}\u00a0km` : ''),
+    h('button', { class: 'boton', type: 'button', onclick: () => ir('nuevaEntrada', { carpeta, tipo: 'llegada' }) }, '🏢 Llegada al despacho')));
   if (abierto) out.push(h('div', { class: 'servicio-abierto' },
     h('div', {}, h('strong', {}, `▶ Servicio iniciado a las ${abierto.HORA}`), abierto.FECHA !== L.fechaES() ? ` del ${abierto.FECHA}` : '', abierto.KM ? ` · 🚗\u00a0${L.formatoKM(abierto.KM)}\u00a0km` : ''),
     h('button', { class: 'boton', type: 'button', onclick: () => ir('nuevaEntrada', { carpeta, tipo: 'fin' }) }, '■ Finalizar servicio')));
@@ -543,8 +551,11 @@ async function vistaHistorial(carpeta, valores) {
     h('button', { class: 'boton', onclick: () => ir('nuevaEntrada', { carpeta }) }, '＋ Nueva entrada'),
     h('button', { class: 'boton grabar', onclick: () => ir('notaVoz', { carpeta }) }, '🎙 Nota de voz')),
   h('div', { class: 'botones servicio' },
-    h('button', { class: 'boton sec', onclick: () => ir('nuevaEntrada', { carpeta, tipo: 'inicio' }) }, '▶ Inicio de servicio'),
-    h('button', { class: 'boton sec', onclick: () => ir('nuevaEntrada', { carpeta, tipo: 'fin' }) }, '■ Fin de servicio')));
+    h('button', { class: 'boton sec', onclick: () => ir('nuevaEntrada', { carpeta, tipo: 'salida' }) }, '🏢 Salida del despacho'),
+    h('button', { class: 'boton sec', onclick: () => ir('nuevaEntrada', { carpeta, tipo: 'inicio' }) }, '▶ Inicio de servicio')),
+  h('div', { class: 'botones servicio' },
+    h('button', { class: 'boton sec', onclick: () => ir('nuevaEntrada', { carpeta, tipo: 'fin' }) }, '■ Fin de servicio'),
+    h('button', { class: 'boton sec', onclick: () => ir('nuevaEntrada', { carpeta, tipo: 'llegada' }) }, '🏢 Llegada al despacho')));
   for (const p of pend) {
     const t = tarjeta(p.audio ? { ...p.entrada, AUDIO: p.audio.nombre, AUDIO_ESTADO: 'pendiente', AUDIO_DURACION: p.audio.duracion, _audioSinSubir: !p.audio.ruta } : p.entrada, { pendiente: true, error: p.error });
     if (p.audio) {
@@ -695,8 +706,10 @@ function extension(file) {
 
 // Botones rápidos: el PC calcula horas y km del servicio a partir de estos textos
 const RAPIDAS = {
+  salida: { titulo: '🏢 Salida del despacho', texto: 'Salida del despacho.', trayecto: 'salida' },
   inicio: { titulo: '▶ Inicio de servicio', texto: 'Se inicia servicio.' },
   fin: { titulo: '■ Fin de servicio', texto: 'Finaliza servicio.' },
+  llegada: { titulo: '🏢 Llegada al despacho', texto: 'Llegada al despacho.', trayecto: 'llegada' },
 };
 
 vistas.nuevaEntrada = async ({ carpeta, tipo }) => {
@@ -797,7 +810,7 @@ vistas.nuevaEntrada = async ({ carpeta, tipo }) => {
       driveId: carpeta.driveId, carpetaId: carpeta.id, numero: carpeta.numero, investigado: carpeta.investigado,
       fichaId: cacheFicha?.fichaId || null,
       expNumero: String(cacheFicha?.obj?.valores?.EXP_NUMERO ?? '').trim() || null,
-      entrada: { FECHA: F, HORA: Hh, LUGAR: lugar.value.trim(), ...(gpsActual ? { GPS: gpsActual } : {}), TEXTO: texto.value.trim(), ...(k.km ? { KM: k.km } : {}) },
+      entrada: { FECHA: F, HORA: Hh, LUGAR: lugar.value.trim(), ...(gpsActual ? { GPS: gpsActual } : {}), TEXTO: texto.value.trim(), ...(k.km ? { KM: k.km } : {}), ...(rapida?.trayecto ? { TRAYECTO: rapida.trayecto } : {}) },
       fotos: fotos.map((f) => ({ nombre: f.nombre, blob: f.blob, pie: f.pie.trim() })),
     });
     fotos.forEach((f) => URL.revokeObjectURL(f.url));

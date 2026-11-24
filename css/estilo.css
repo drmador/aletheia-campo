@@ -219,3 +219,5 @@ details.mas-datos summary { cursor: pointer; color: var(--marca); font-weight: 6
 .etiqueta-colab { display: inline-block; font-size: .78rem; font-weight: 700; border-radius: 6px; padding: 1px 8px; margin: 6px 6px 2px 0; background: #e8eefb; color: #23395b; }
 :root[data-noche] .etiqueta-colab { background: #1a140d; color: #b39577; }
 .chip-mat .de { font-style: italic; }
+
+.servicio-abierto.en-ruta { border-color: var(--marca); }
