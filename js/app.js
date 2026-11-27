@@ -10,7 +10,7 @@ import * as L from './logica.js';
 import * as B from './bloqueo.js';
 import { h, vistaDatos, vistaVehiculos, vistaPropiedades, minimizar, CLAVES_FOTOS, NOMBRES_CAMPOS, lugarConMapa, linkMapa } from './vistas.js';
 
-const VERSION_APP = '1.16.0';
+const VERSION_APP = '1.16.1';
 const app = document.getElementById('app');
 const graph = crearGraph({ token: auth.token });
 
@@ -1010,7 +1010,8 @@ function grabarConMarca(carpeta) {
     const boton = h('button', { class: 'boton peligro grande', type: 'button', disabled: true }, '● Grabar');
     const cancelar = h('button', { class: 'boton sec', type: 'button' }, 'Cancelar');
     video.className = 'video-fuente';
-    const capa = h('div', { class: 'capa-grabadora' }, video, lienzo, h('div', { class: 'controles-grabadora' }, h('div', { class: 'grabando-indicador pequeño' }, h('span', { class: 'punto' }), tiempo), aviso, h('div', { class: 'botones' }, boton, cancelar)));
+    const marco = h('div', { class: 'marco-lienzo' }, lienzo);
+    const capa = h('div', { class: 'capa-grabadora' }, video, marco, h('div', { class: 'controles-grabadora' }, h('div', { class: 'grabando-indicador pequeño' }, h('span', { class: 'punto' }), tiempo), aviso, h('div', { class: 'botones' }, boton, cancelar)));
     document.body.append(capa);
     const ctx = lienzo.getContext('2d');
     const dos = (n) => String(n).padStart(2, '0');
@@ -1074,6 +1075,11 @@ function grabarConMarca(carpeta) {
       ctx.translate(W / 2, H / 2); ctx.rotate(-r * Math.PI / 180);
       ctx.drawImage(video, -fw * esc / 2, -fh * esc / 2, fw * esc, fh * esc);
       ctx.restore();
+      // En pantalla, la vista previa se gira al revés para que la veas de pie con el móvil en la mano
+      // (el archivo sí queda girado y con la marca abajo, como debe verse al reproducirlo).
+      const mw = marco.clientWidth, mh = marco.clientHeight;
+      const estiloVista = r % 180 ? `width:${mh}px;height:${mw}px;transform:translate(-50%,-50%) rotate(${r}deg)` : `width:${mw}px;height:${mh}px;transform:translate(-50%,-50%) rotate(${r}deg)`;
+      if (lienzo.dataset.vista !== estiloVista) { lienzo.dataset.vista = estiloVista; lienzo.style.cssText = estiloVista; }
       const t = Math.max(14, Math.round(Math.min(W, H) * 0.04));
       const lineas = [`${dos(d.getDate())}/${dos(d.getMonth() + 1)}/${d.getFullYear()}  ${dos(d.getHours())}:${dos(d.getMinutes())}:${dos(d.getSeconds())}`, [exp, gpsTxt].filter(Boolean).join('  ·  ')];
       const alto = t * 1.35 * lineas.length + t * 0.6;
