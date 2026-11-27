@@ -10,7 +10,7 @@ import * as L from './logica.js';
 import * as B from './bloqueo.js';
 import { h, vistaDatos, vistaVehiculos, vistaPropiedades, minimizar, CLAVES_FOTOS, NOMBRES_CAMPOS, lugarConMapa, linkMapa } from './vistas.js';
 
-const VERSION_APP = '1.15.1';
+const VERSION_APP = '1.16.0';
 const app = document.getElementById('app');
 const graph = crearGraph({ token: auth.token });
 
@@ -436,6 +436,12 @@ vistas.directorio = async () => {
     datos = { lista: lista2, cuando: Date.now() };
     await cache.set('directorio', datos);
     pintar();
+    // Carpetas que no parecen expedientes: se enseñan aparte para poder ver por qué no salen
+    const otras = hijos.filter((x) => x.folder && !L.leerNombreCarpeta(x.name)).map((x) => x.name).sort();
+    if (otras.length) main.append(h('details', { class: 'otras-carpetas' },
+      h('summary', {}, `Otras carpetas que no parecen expedientes (${otras.length})`),
+      h('p', { class: 'sub' }, 'Para que una carpeta salga en la lista, su nombre tiene que empezar por el número del expediente, por ejemplo «0446 - EDP0163 - Nombre».'),
+      h('ul', {}, ...otras.map((n) => h('li', {}, `«${n}»`)))));
   } catch (e) {
     if (e instanceof auth.SesionCaducada) { ultimoErrorSesion = true; actualizarChip(); estado(main, 'La sesión de Microsoft ha caducado: pulsa «⚠ Entrar» arriba.', 'aviso'); }
     else estado(main, 'No se pudo actualizar: ' + e.message, 'error');
@@ -995,6 +1001,7 @@ vistas.nuevaEntrada = async ({ carpeta, tipo }) => {
 const MAX_SEGUNDOS_VIDEO = 30 * 60;
 function grabarConMarca(carpeta) {
   return new Promise(async (resolver) => {
+    let quitarSensor = () => {};
     let flujo = null, grabador = null, wake = null, anim = 0, reloj = 0, gpsWatch = null, gpsTxt = '', partes = [], inicio = null, cerrado = false;
     const video = h('video', { muted: true, playsInline: true, autoplay: true });
     const lienzo = h('canvas', { class: 'lienzo-marca' });
@@ -1012,6 +1019,7 @@ function grabarConMarca(carpeta) {
       if (cerrado) return; cerrado = true;
       cancelAnimationFrame(anim); clearInterval(reloj);
       if (gpsWatch != null) navigator.geolocation.clearWatch(gpsWatch);
+      quitarSensor();
       flujo?.getTracks().forEach((t) => t.stop());
       wake?.release?.().catch(() => {});
       document.removeEventListener('visibilitychange', alOcultar);
@@ -1031,12 +1039,41 @@ function grabarConMarca(carpeta) {
     video.srcObject = flujo;
     await new Promise((ok) => { if (video.readyState >= 1) ok(); else video.onloadedmetadata = ok; });
     await video.play().catch(() => {});
-    lienzo.width = video.videoWidth || 1280; lienzo.height = video.videoHeight || 720;
+    // Orientación real del móvil (la app está fija en vertical): se mira la gravedad.
+    // fisico = 0 vertical, 90 girado a la izquierda, 180 boca abajo, 270 girado a la derecha.
+    // Antes de grabar sigue al móvil; al pulsar «Grabar» se queda fija para todo el vídeo, como en la cámara normal.
+    let fisico = 0, fijada = null;
+    const alMover = (e) => {
+      const g = e.accelerationIncludingGravity; if (!g || g.x == null) return;
+      const ax = Math.abs(g.x), ay = Math.abs(g.y);
+      if (Math.max(ax, ay) < 5 || Math.abs(ax - ay) < 2.5) return; // plano o en diagonal: no se cambia
+      fisico = L.orientacionPorGravedad(g.x, g.y);
+    };
+    window.addEventListener('devicemotion', alMover);
+    quitarSensor = () => window.removeEventListener('devicemotion', alMover);
+    const anguloPantalla = () => (screen.orientation?.angle ?? window.orientation ?? 0);
+    const ajustarLienzo = () => {
+      const fw = video.videoWidth || 1280, fh = video.videoHeight || 720;
+      const r = L.giroNecesario(fijada ?? fisico, anguloPantalla());
+      const [w, h2] = r % 180 ? [fh, fw] : [fw, fh];
+      if (lienzo.width !== w || lienzo.height !== h2) { lienzo.width = w; lienzo.height = h2; }
+    };
+    ajustarLienzo();
     gpsWatch = navigator.geolocation?.watchPosition((p) => { gpsTxt = 'GPS ' + L.formatoGPS(p.coords.latitude, p.coords.longitude); }, () => {}, { enableHighAccuracy: true, maximumAge: 5000 });
     // Cada fotograma: la imagen de la cámara + una franja con la marca de tiempo
     const pintar = () => {
+      if (fijada == null) ajustarLienzo(); // antes de grabar, el lienzo sigue al móvil
       const W = lienzo.width, H = lienzo.height, d = new Date();
-      ctx.drawImage(video, 0, 0, W, H);
+      // La imagen de la cámara llega «de pie» respecto a la pantalla: se gira para que quede de pie en la realidad
+      const r = L.giroNecesario(fijada ?? fisico, anguloPantalla());
+      const fw = video.videoWidth || W, fh = video.videoHeight || H;
+      const [vw, vh] = r % 180 ? [fh, fw] : [fw, fh];
+      const esc = Math.max(W / vw, H / vh); // llenar el lienzo sin deformar
+      ctx.save();
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+      ctx.translate(W / 2, H / 2); ctx.rotate(-r * Math.PI / 180);
+      ctx.drawImage(video, -fw * esc / 2, -fh * esc / 2, fw * esc, fh * esc);
+      ctx.restore();
       const t = Math.max(14, Math.round(Math.min(W, H) * 0.04));
       const lineas = [`${dos(d.getDate())}/${dos(d.getMonth() + 1)}/${d.getFullYear()}  ${dos(d.getHours())}:${dos(d.getMinutes())}:${dos(d.getSeconds())}`, [exp, gpsTxt].filter(Boolean).join('  ·  ')];
       const alto = t * 1.35 * lineas.length + t * 0.6;
@@ -1049,10 +1086,11 @@ function grabarConMarca(carpeta) {
     document.addEventListener('visibilitychange', alOcultar);
     const tipos = ['video/mp4;codecs=avc1.42E01F,mp4a.40.2', 'video/mp4;codecs=avc1,mp4a', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
     const tipo = tipos.find((x) => window.MediaRecorder?.isTypeSupported?.(x)) || '';
-    aviso.textContent = 'La marca de tiempo queda grabada en la imagen.';
+    aviso.textContent = 'La marca de tiempo queda grabada en la imagen. Pon el móvil en vertical u horizontal antes de pulsar «Grabar».';
     boton.disabled = false;
     boton.onclick = async () => {
       if (grabador?.state === 'recording') return parar();
+      fijada = fisico; ajustarLienzo(); // la orientación queda fija durante todo el vídeo
       const salida = lienzo.captureStream(30);
       flujo.getAudioTracks().forEach((a) => salida.addTrack(a));
       grabador = new MediaRecorder(salida, { ...(tipo ? { mimeType: tipo } : {}), videoBitsPerSecond: lienzo.width * lienzo.height >= 1920 * 1080 ? 6000000 : 3500000 });

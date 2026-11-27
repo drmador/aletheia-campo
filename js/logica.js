@@ -13,7 +13,8 @@ const dos = (n) => String(n).padStart(2, '0');
 
 // "0440 - EDP0150 - Ana Ejemplo" -> {numero:'0440', edp:'EDP0150', investigado:'Ana Ejemplo'}
 export function leerNombreCarpeta(nombre) {
-  const n = nfc(nombre);
+  // Quita espacios, espacios duros y caracteres invisibles del principio (pasa al copiar y pegar nombres)
+  const n = nfc(nombre).replace(/^[\s\u00a0\u200b-\u200f\u2060\ufeff]+/, '');
   const m = n.match(RE_EXPEDIENTE);
   if (!m) return null;
   const resto = n.slice(m[0].length).replace(/^[\s\-–—_.]+/, '').trim();
@@ -783,3 +784,14 @@ export function enlaceMaps(direccion) {
 export function enlaceRuta(direccion) {
   return 'https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=' + encodeURIComponent(direccion);
 }
+
+// ---------- Orientación del vídeo con marca ----------
+// Gravedad (devicemotion, accelerationIncludingGravity) → giro del móvil en grados, como screen.orientation.angle:
+// 0 de pie, 90 girado a la izquierda (horizontal normal), 180 boca abajo, 270 girado a la derecha.
+export function orientacionPorGravedad(x, y) {
+  if (Math.abs(y) >= Math.abs(x)) return y >= 0 ? 0 : 180;
+  return x >= 0 ? 90 : 270;
+}
+// Grados que hay que girar la imagen de la cámara (que llega de pie respecto a la pantalla)
+// para que quede de pie en la realidad. 0, 90, 180 o 270.
+export const giroNecesario = (fisico, pantalla) => (((fisico - pantalla) % 360) + 360) % 360;

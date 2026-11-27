@@ -244,3 +244,7 @@ video.video { width: 100%; max-height: 260px; border-radius: 10px; background: #
 .grabando-indicador.pequeño { font-size: 1.4rem; margin: 4px 0; }
 .capa-grabadora:not(.grabando) .grabando-indicador .punto { animation: none; background: #666; }
 .video-fuente { position: absolute; width: 2px; height: 2px; opacity: 0.01; pointer-events: none; top: 0; left: 0; }
+
+.otras-carpetas{margin:1rem 0;font-size:.9rem;opacity:.85}
+.otras-carpetas summary{cursor:pointer;padding:.5rem 0}
+.otras-carpetas ul{padding-left:1.2rem}
