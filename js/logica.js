@@ -4,7 +4,8 @@
 // ============================================================
 
 export const PROGRAMA = 'Generador de Fichas';
-export const RE_EXPEDIENTE = /^(\d+)\s*-\s*(EDP\d+)/i;
+// «0446 - EDP0163 - Nombre», pero también con guion largo, «_», «EDP 0163», «EDP-0163» o sin EDP.
+export const RE_EXPEDIENTE = /^(\d{3,})(?:\s*[-–—_.]?\s*(EDP)\s*[-_]?\s*(\d+))?/i;
 export const CARPETA_FOTOS_MOVIL = 'Imagenes/Aportaciones';
 
 const nfc = (s) => (s ?? '').toString().normalize('NFC');
@@ -15,8 +16,8 @@ export function leerNombreCarpeta(nombre) {
   const n = nfc(nombre);
   const m = n.match(RE_EXPEDIENTE);
   if (!m) return null;
-  const resto = n.slice(m[0].length).replace(/^\s*-\s*/, '').trim();
-  return { numero: m[1], edp: m[2].toUpperCase(), investigado: resto };
+  const resto = n.slice(m[0].length).replace(/^[\s\-–—_.]+/, '').trim();
+  return { numero: m[1], edp: m[2] ? 'EDP' + m[3] : '', investigado: resto };
 }
 
 export const numero4 = (num) => String(num).replace(/\D/g, '').padStart(4, '0');

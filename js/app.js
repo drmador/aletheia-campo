@@ -10,7 +10,7 @@ import * as L from './logica.js';
 import * as B from './bloqueo.js';
 import { h, vistaDatos, vistaVehiculos, vistaPropiedades, minimizar, CLAVES_FOTOS, NOMBRES_CAMPOS, lugarConMapa, linkMapa } from './vistas.js';
 
-const VERSION_APP = '1.15.0';
+const VERSION_APP = '1.15.1';
 const app = document.getElementById('app');
 const graph = crearGraph({ token: auth.token });
 
@@ -407,7 +407,7 @@ vistas.directorio = async () => {
   const buscar = h('input', { type: 'search', placeholder: 'Buscar por número, EDP o nombre…', autocomplete: 'off' });
   const ultimo = await kv.get('ultimoExpediente');
   if (ultimo) main.append(h('button', { class: 'boton sec ancho ultimo-exp', onclick: () => ir('expediente', { carpeta: ultimo }) },
-    '↩ Último: ', h('strong', {}, ultimo.numero), ' · ', ultimo.investigado || ultimo.edp));
+    '↩ Último: ', h('strong', {}, ultimo.numero), ' · ', ultimo.investigado || ultimo.edp || ultimo.name));
   const lista = h('ul', { class: 'lista' });
   main.append(buscar, lista);
   let datos = (await cache.get('directorio')) || null;
@@ -422,7 +422,7 @@ vistas.directorio = async () => {
     });
     lista.replaceChildren(...(filas.length ? filas.map((x) => h('li', { onclick: () => ir('expediente', { carpeta: x, pestana: 'historial' }) },
       h('span', { class: 'num' }, x.numero),
-      h('div', { class: 'crece' }, h('div', {}, x.investigado || '(sin nombre)'), h('div', { class: 'sub' }, x.edp)))) :
+      h('div', { class: 'crece' }, h('div', {}, x.investigado || (x.edp ? '(sin nombre)' : x.name)), h('div', { class: 'sub' }, x.edp)))) :
       [h('li', { class: 'vacio' }, datos ? 'Ningún expediente coincide.' : 'Cargando…')]));
   };
   buscar.addEventListener('input', pintar);
@@ -447,7 +447,7 @@ const PESTANAS = [['historial', 'Historial'], ['datos', 'Datos'], ['vehiculos', 
 
 vistas.expediente = async ({ carpeta, pestana = 'historial' }) => {
   kv.set('ultimoExpediente', carpeta); // para los atajos del icono y el acceso rápido del directorio
-  const main = pantalla(`${carpeta.numero} · ${carpeta.investigado || carpeta.edp}`, { atras: true, acciones: [
+  const main = pantalla(`${carpeta.numero} · ${carpeta.investigado || carpeta.edp || carpeta.name}`, { atras: true, acciones: [
     chipPendientes(),
     h('button', { 'aria-label': 'Actualizar', title: 'Volver a leer la ficha de OneDrive', onclick: () => { estado(main, enLinea() ? 'Leyendo la ficha de OneDrive…' : '', ''); cargar(); } }, '↻')] });
   const nav = h('nav', { class: 'pestanas', role: 'tablist' });
