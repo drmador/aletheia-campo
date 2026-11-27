@@ -221,3 +221,26 @@ details.mas-datos summary { cursor: pointer; color: var(--marca); font-weight: 6
 .chip-mat .de { font-style: italic; }
 
 .servicio-abierto.en-ruta { border-color: var(--marca); }
+
+.enlaces-lugar { white-space: normal; }
+a.mapa.ruta { margin-left: 6px; }
+.ident-trabajos { display: flex; gap: 6px; }
+.ultimo-exp { margin-bottom: 8px; justify-content: flex-start; }
+.codigo-cuenta { word-break: break-all; font-size: .85rem; background: var(--linea); padding: 2px 6px; border-radius: 6px; }
+
+/* ---- Vídeos ---- */
+video.video { width: 100%; max-height: 260px; border-radius: 10px; background: #000; margin-top: 6px; }
+.video-item { margin: 8px 0; }
+.fila-video { display: flex; gap: 8px; align-items: center; }
+.fila-video input { margin: 4px 0; }
+.video-subido { margin: 6px 0; }
+:root[data-noche] video.video { filter: brightness(.6); }
+
+/* ---- Grabadora con marca de tiempo ---- */
+.capa-grabadora { position: fixed; inset: 0; z-index: 90; background: #000; display: flex; flex-direction: column; }
+.lienzo-marca { flex: 1; min-height: 0; width: 100%; object-fit: contain; }
+.controles-grabadora { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); background: #111; color: #ddd; }
+.controles-grabadora .sub { color: #bbb; text-align: center; }
+.grabando-indicador.pequeño { font-size: 1.4rem; margin: 4px 0; }
+.capa-grabadora:not(.grabando) .grabando-indicador .punto { animation: none; background: #666; }
+.video-fuente { position: absolute; width: 2px; height: 2px; opacity: 0.01; pointer-events: none; top: 0; left: 0; }

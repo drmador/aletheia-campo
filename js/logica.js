@@ -58,7 +58,7 @@ export function claveEntrada(e) {
   if (audio) return 'AUDIO\u0001' + audio;
   const texto = limpiaTexto(e?.TEXTO);
   const k = [limpiaTexto(e?.FECHA), limpiaTexto(e?.HORA), texto];
-  if (!texto) k.push((e?.FOTOS || []).map((f) => rutaRelativaLimpia(limpiaTexto(f?.ruta)).toLowerCase()).filter(Boolean).sort().join('|'));
+  if (!texto) k.push([...(e?.FOTOS || []), ...(e?.VIDEOS || [])].map((f) => rutaRelativaLimpia(limpiaTexto(f?.ruta)).toLowerCase()).filter(Boolean).sort().join('|'));
   const km = limpiarKM(e?.KM).km;
   if (km) k.push('KM' + km); // dos «Se inicia servicio.» en el mismo minuto con distintos km son distintas
   return k.join('\u0001');
@@ -92,13 +92,16 @@ export function normalizarEntrada(e) {
   };
   if (esGPS(limpiaTexto(e.GPS))) out.GPS = limpiaTexto(e.GPS);
   out.TEXTO = limpiaTexto(e.TEXTO);
-  out.FOTOS = (e.FOTOS || []).map((f) => ({ ruta: f.ruta, pie: f.pie || '' }));
+  out.FOTOS = (e.FOTOS || []).map((f) => ({ ruta: f.ruta, pie: f.pie || '', ...(esSha256(f.sha256) ? { sha256: f.sha256 } : {}) }));
+  if (Array.isArray(e.VIDEOS) && e.VIDEOS.length)
+    out.VIDEOS = e.VIDEOS.map((f) => ({ ruta: f.ruta, pie: f.pie || '', ...(esSha256(f.sha256) ? { sha256: f.sha256 } : {}), ...(f.marca === true ? { marca: true } : {}) }));
   // Nota de voz: AUDIO, AUDIO_ESTADO ("pendiente"), AUDIO_DURACION (segundos, opcional), ordenador
   if (limpiaTexto(e.AUDIO)) {
     out.AUDIO = rutaRelativaLimpia(limpiaTexto(e.AUDIO));
     out.AUDIO_ESTADO = 'pendiente';
     const d = Number(e.AUDIO_DURACION);
     if (Number.isFinite(d) && d > 0) out.AUDIO_DURACION = Math.round(d * 10) / 10;
+    if (esSha256(e.AUDIO_SHA256)) out.AUDIO_SHA256 = e.AUDIO_SHA256;
   }
   // Km del coche: solo si se anotaron, como texto y solo cifras
   const km = limpiarKM(e.KM);
@@ -156,8 +159,9 @@ export function yaEsta(e, historial) {
   const lista = Array.isArray(historial) ? historial : [];
   const k = claveEntrada(e);
   const n = (r) => rutaRelativaLimpia(limpiaTexto(r)).toLowerCase();
-  const fotos = new Set((e?.FOTOS || []).map((f) => n(f?.ruta)).filter(Boolean));
-  return lista.some((x) => x && (claveEntrada(x) === k || (fotos.size && Array.isArray(x.FOTOS) && x.FOTOS.some((f) => fotos.has(n(f?.ruta))))));
+  const fotos = new Set([...(e?.FOTOS || []), ...(e?.VIDEOS || [])].map((f) => n(f?.ruta)).filter(Boolean));
+  const deX = (x) => [...(Array.isArray(x.FOTOS) ? x.FOTOS : []), ...(Array.isArray(x.VIDEOS) ? x.VIDEOS : [])];
+  return lista.some((x) => x && (claveEntrada(x) === k || (fotos.size && deX(x).some((f) => fotos.has(n(f?.ruta))))));
 }
 
 // ---------- Copias en conflicto de OneDrive ----------
@@ -301,6 +305,26 @@ export function leerExif(buffer) {
   return sin;
 }
 
+/**
+ * Fecha de grabación de un vídeo MP4/MOV (caja «mvhd»: segundos desde 1904, en UTC).
+ * `trozos`: los bytes del principio y/o del final del archivo (la cámara a veces la pone al final).
+ */
+export function leerFechaMp4(...trozos) {
+  for (const buf of trozos) {
+    if (!buf) continue;
+    const b = new Uint8Array(buf), v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+    for (let i = 4; i + 16 <= b.length; i++) {
+      if (b[i] !== 0x6d || b[i + 1] !== 0x76 || b[i + 2] !== 0x68 || b[i + 3] !== 0x64) continue; // "mvhd"
+      const ver = b[i + 4];
+      const seg = ver === 1 ? Number(v.getBigUint64(i + 8)) : v.getUint32(i + 8);
+      const ms = (seg - 2082844800) * 1000;
+      const f = new Date(ms);
+      if (seg > 2082844800 && f.getFullYear() > 2000 && f.getFullYear() < 2100) return f;
+    }
+  }
+  return null;
+}
+
 /** Fecha y hora en el nombre del archivo: «20261120_091205.jpg», «IMG_20261120-091205», «2026-11-20 09-12-05»… */
 export function fechaDeNombre(nombre) {
   const m = String(nombre || '').match(/(20\d\d)[-_.]?(\d\d)[-_.]?(\d\d)[ _T-]?(\d\d)[-_.:h]?(\d\d)(?:[-_.:m]?(\d\d))?/);
@@ -350,8 +374,62 @@ export function resumenDia(entradas, fecha) {
 }
 export const duracionHM = (min) => `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')} min`;
 
+// ---------- Huella digital (SHA-256) de fotos, audios y vídeos ----------
+// Se calcula en el móvil, al guardar la entrada y antes de subir nada: así se puede demostrar
+// después que el archivo entregado es exactamente el que se hizo sobre el terreno.
+const K256 = new Uint32Array([0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2]);
+/** SHA-256 por trozos (para archivos grandes que no caben de golpe en memoria). */
+export function crearSha256() {
+  const H = new Uint32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]);
+  const W = new Uint32Array(64), buf = new Uint8Array(64);
+  let lleno = 0, total = 0;
+  const bloque = (b, o) => {
+    for (let i = 0; i < 16; i++) W[i] = (b[o + i * 4] << 24) | (b[o + i * 4 + 1] << 16) | (b[o + i * 4 + 2] << 8) | b[o + i * 4 + 3];
+    for (let i = 16; i < 64; i++) {
+      const x = W[i - 15], y = W[i - 2];
+      W[i] = (((x >>> 7) | (x << 25)) ^ ((x >>> 18) | (x << 14)) ^ (x >>> 3)) + W[i - 7] + (((y >>> 17) | (y << 15)) ^ ((y >>> 19) | (y << 13)) ^ (y >>> 10)) + W[i - 16];
+    }
+    let [a, bb, c, d, e, f, g, hh] = H;
+    for (let i = 0; i < 64; i++) {
+      const t1 = (hh + (((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7))) + ((e & f) ^ (~e & g)) + K256[i] + W[i]) | 0;
+      const t2 = ((((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10))) + ((a & bb) ^ (a & c) ^ (bb & c))) | 0;
+      hh = g; g = f; f = e; e = (d + t1) | 0; d = c; c = bb; bb = a; a = (t1 + t2) | 0;
+    }
+    H[0] += a; H[1] += bb; H[2] += c; H[3] += d; H[4] += e; H[5] += f; H[6] += g; H[7] += hh;
+  };
+  return {
+    añadir(datos) {
+      const d = datos instanceof Uint8Array ? datos : new Uint8Array(datos);
+      total += d.length;
+      let i = 0;
+      if (lleno) { const n = Math.min(64 - lleno, d.length); buf.set(d.subarray(0, n), lleno); lleno += n; i = n; if (lleno === 64) { bloque(buf, 0); lleno = 0; } }
+      for (; i + 64 <= d.length; i += 64) bloque(d, i);
+      if (i < d.length) { buf.set(d.subarray(i), 0); lleno = d.length - i; }
+    },
+    fin() {
+      const bits = total * 8, relleno = new Uint8Array(((lleno < 56 ? 56 : 120) - lleno) + 8);
+      relleno[0] = 0x80;
+      const v = new DataView(relleno.buffer), L = relleno.length;
+      v.setUint32(L - 8, Math.floor(bits / 0x100000000)); v.setUint32(L - 4, bits >>> 0);
+      this.añadir(relleno);
+      return Array.from(H, (x) => x.toString(16).padStart(8, '0')).join('');
+    },
+  };
+}
+const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
+/** Huella SHA-256 (hex) de un Blob/File. Los grandes, por trozos de 8 MB; `progreso(0..1)` opcional. */
+export async function huellaSha256(blob, progreso) {
+  if (blob.size <= 64 * 1024 * 1024 && globalThis.crypto?.subtle)
+    return hex(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()));
+  const h = crearSha256(), T = 8 * 1024 * 1024;
+  for (let o = 0; o < blob.size; o += T) { h.añadir(new Uint8Array(await blob.slice(o, o + T).arrayBuffer())); progreso?.(Math.min(1, (o + T) / blob.size)); }
+  return h.fin();
+}
+export const esSha256 = (x) => /^[0-9a-f]{64}$/.test(String(x || ''));
+
 // ---------- Notas de voz ----------
 export const CARPETA_AUDIOS = 'Audios';
+export const CARPETA_VIDEOS = 'Videos';
 /** "Nota 2026-11-03 10-42-15.m4a" (fecha y hora de inicio, con segundos) */
 export function nombreNotaVoz(d, ext = 'm4a') {
   return `Nota ${d.getFullYear()}-${dos(d.getMonth() + 1)}-${dos(d.getDate())} ${dos(d.getHours())}-${dos(d.getMinutes())}-${dos(d.getSeconds())}.${ext}`;
@@ -699,4 +777,8 @@ export function etiquetaCampo(k) {
 
 export function enlaceMaps(direccion) {
   return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(direccion);
+}
+/** Ruta en coche desde donde estás hasta esa dirección (Google Maps calcula el origen). */
+export function enlaceRuta(direccion) {
+  return 'https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=' + encodeURIComponent(direccion);
 }

@@ -8,13 +8,13 @@
 import {
   leerFichaBytes, añadirAlHistorialBytes, comprobarFicha, yaEsta, estaDescartada, limpiaTexto as L_limpia,
   anexarRegistro, lineaRegistro, nombreRegistro, esNombreFicha,
-  CARPETA_FOTOS_MOVIL, CARPETA_AUDIOS, nombreAlternativoAudio, fechaES, horaSegES, rutaRelativaLimpia,
+  CARPETA_FOTOS_MOVIL, CARPETA_AUDIOS, CARPETA_VIDEOS, nombreAlternativoAudio, fechaES, horaSegES, rutaRelativaLimpia,
 } from './logica.js';
 
 const MAX_INTENTOS = 6;
 const espera = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export function crearOperaciones(graph, { ordenador, usuario }) {
+export function crearOperaciones(graph, { ordenador, usuario }, opciones = {}) {
   /** Localiza la ficha JSON dentro de la carpeta del expediente. */
   async function buscarFicha(driveId, carpetaId, numero) {
     const hijos = await graph.hijos(driveId, carpetaId);
@@ -90,13 +90,16 @@ export function crearOperaciones(graph, { ordenador, usuario }) {
    * Sube un archivo NUEVO a `carpeta` sin sobrescribir nunca. Si el nombre ya existe,
    * prueba con `alternativo(nombre, 2)`, `(…, 3)`… Devuelve su ruta relativa.
    */
-  async function subirArchivo(driveId, carpetaId, carpeta, nombre, blob, tipo, alternativo) {
+  async function subirArchivo(driveId, carpetaId, carpeta, nombre, blob, tipo, alternativo, progreso) {
     let n = nombre;
     for (let i = 0; i < MAX_INTENTOS; i++) {
       const rel = `${carpeta}/${n}`;
       let creado;
       try {
-        creado = await graph.crearNuevo(driveId, carpetaId, rel, blob, tipo);
+        // Los grandes (vídeos), por trozos; el resto, de una vez
+        creado = blob.size > 4 * 1024 * 1024 && graph.subirGrande
+          ? await graph.subirGrande(driveId, carpetaId, rel, blob, progreso)
+          : await graph.crearNuevo(driveId, carpetaId, rel, blob, tipo);
       } catch (e) {
         if (e.estado !== 409) throw e;
         // Ya existe: si es el mismo archivo (subido en un intento anterior que se cortó) vale; si no, otro nombre.
@@ -148,6 +151,11 @@ export function crearOperaciones(graph, { ordenador, usuario }) {
     subirArchivo(driveId, carpetaId, CARPETA_FOTOS_MOVIL, nombre, blob, blob.type || 'image/jpeg',
       (n, k) => n.replace(/(\.\w+)$/, `_${k}$1`));
 
+  /** Sube un vídeo a Videos sin sobrescribir nunca. */
+  const subirVideo = (driveId, carpetaId, nombre, blob, progreso) =>
+    subirArchivo(driveId, carpetaId, CARPETA_VIDEOS, nombre, blob, (blob.type || 'video/mp4').split(';')[0],
+      (n, k) => n.replace(/(\.\w+)$/, `_${k}$1`), progreso);
+
   /** Sube una nota de voz a Audios sin sobrescribir nunca ("Nota … (2).m4a"). */
   const subirAudio = (driveId, carpetaId, nombre, blob) =>
     subirArchivo(driveId, carpetaId, CARPETA_AUDIOS, nombre, blob, (blob.type || 'audio/mp4').split(';')[0], nombreAlternativoAudio);
@@ -166,10 +174,11 @@ export function crearOperaciones(graph, { ordenador, usuario }) {
     // 0.º leer la ficha de OneDrive: si la entrada ya está (aunque el PC la haya corregido) o el PC la
     //     descartó, no se sube nada más (lo del PC manda).
     //     (Una nota cuyo audio no ha subido, o una entrada sin texto cuyas fotos no han subido, no puede estar ya.)
-    const sinIdentificar = (p.audio && !p.audio.ruta) || (!L_limpia(p.entrada.TEXTO) && p.fotos.length && !p.fotos.some((f) => f.ruta));
+    const archivos = [...p.fotos, ...(p.videos || [])];
+    const sinIdentificar = (p.audio && !p.audio.ruta) || (!L_limpia(p.entrada.TEXTO) && archivos.length && !archivos.some((f) => f.ruta));
     if (p.fase !== 'registro' && !sinIdentificar) {
       const { obj } = await leerFicha(p.driveId, p.fichaId);
-      const borrador = { ...p.entrada, FOTOS: p.fotos.filter((f) => f.ruta).map((f) => ({ ruta: f.ruta })), ...(p.audio?.ruta ? { AUDIO: p.audio.ruta } : {}) };
+      const borrador = { ...p.entrada, FOTOS: p.fotos.filter((f) => f.ruta).map((f) => ({ ruta: f.ruta })), VIDEOS: (p.videos || []).filter((v) => v.ruta).map((v) => ({ ruta: v.ruta })), ...(p.audio?.ruta ? { AUDIO: p.audio.ruta } : {}) };
       if (estaDescartada(borrador, obj.valores._DESCARTADAS)) { p.descartada = true; p.añadida = 0; p.fase = 'registro'; await guardarProgreso(p); }
       else if (yaEsta(borrador, obj.valores.HISTORIAL)) { p.añadida = 0; p.fase = 'registro'; await guardarProgreso(p); }
       if (obj.valores.EXP_NUMERO) p.expNumero = String(obj.valores.EXP_NUMERO).trim();
@@ -187,10 +196,18 @@ export function crearOperaciones(graph, { ordenador, usuario }) {
       foto.blob = null; // ya está en OneDrive: se quita del móvil
       await guardarProgreso(p);
     }
+    // 2.º bis los vídeos (por trozos)
+    for (const v of p.videos || []) {
+      if (v.ruta || p.fase === 'registro') continue;
+      v.ruta = await subirVideo(p.driveId, p.carpetaId, v.nombre, v.blob, (x) => opciones.progreso?.(p, v, x));
+      v.blob = null;
+      await guardarProgreso(p);
+    }
     if (p.fase !== 'registro') {
       // 3.º la entrada en la ficha
-      const entrada = { ...p.entrada, FOTOS: p.fotos.map((f) => ({ ruta: f.ruta, pie: f.pie || '' })) };
-      if (p.audio) Object.assign(entrada, { AUDIO: p.audio.ruta, AUDIO_DURACION: p.audio.duracion });
+      const entrada = { ...p.entrada, FOTOS: p.fotos.map((f) => ({ ruta: f.ruta, pie: f.pie || '', sha256: f.sha256 })) };
+      if ((p.videos || []).length) entrada.VIDEOS = p.videos.map((v) => ({ ruta: v.ruta, pie: v.pie || '', sha256: v.sha256, marca: v.marca === true }));
+      if (p.audio) Object.assign(entrada, { AUDIO: p.audio.ruta, AUDIO_DURACION: p.audio.duracion, AUDIO_SHA256: p.audio.sha256 });
       const r = await añadirAlHistorial(p.driveId, p.fichaId, [entrada]);
       p.añadida = r.añadidas;
       if (!r.añadidas && r.descartadas) p.descartada = true;
@@ -200,18 +217,20 @@ export function crearOperaciones(graph, { ordenador, usuario }) {
     }
     const resumen = `${p.entrada.FECHA} ${p.entrada.HORA} · ${p.entrada.LUGAR || (p.entrada.GPS ? 'GPS ' + p.entrada.GPS : 'sin lugar')} · ${p.fotos.length} foto(s)${p.entrada.KM ? ' · ' + p.entrada.KM + ' km' : ''}`;
     const acciones = [];
-    for (const f of p.fotos) if (f.ruta) acciones.push(['Foto añadida', f.ruta]);
+    const conHuella = (x) => x.ruta + (x.sha256 ? ' · SHA-256 ' + x.sha256 : '');
+    for (const f of p.fotos) if (f.ruta) acciones.push(['Foto añadida', conHuella(f)]);
+    for (const v of p.videos || []) if (v.ruta) acciones.push(['Vídeo añadido', conHuella(v)]);
     if (p.descartada) {
       acciones.length = 0;
       acciones.push(['Historial: entrada no subida (descartada en el PC)', resumen]);
     } else if (p.audio) {
       const archivo = p.audio.ruta.split('/').pop();
-      acciones.push(p.añadida ? ['Nota de voz grabada', archivo] : ['Nota de voz ya existente (no se duplica)', archivo]);
+      acciones.push(p.añadida ? ['Nota de voz grabada', archivo + (p.audio.sha256 ? ' · SHA-256 ' + p.audio.sha256 : '')] : ['Nota de voz ya existente (no se duplica)', archivo]);
     } else {
       acciones.push(p.añadida ? ['Historial: entrada añadida', resumen] : ['Historial: entrada ya existente (no se duplica)', resumen]);
     }
     await anotar(p.driveId, p.carpetaId, p.expNumero || p.numero, acciones);
   }
 
-  return { buscarFicha, leerFicha, añadirAlHistorial, anotar, subirFoto, subirAudio, buscarAudio, procesarPendiente };
+  return { buscarFicha, leerFicha, añadirAlHistorial, anotar, subirFoto, subirAudio, subirVideo, buscarAudio, procesarPendiente };
 }

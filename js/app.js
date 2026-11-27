@@ -10,11 +10,15 @@ import * as L from './logica.js';
 import * as B from './bloqueo.js';
 import { h, vistaDatos, vistaVehiculos, vistaPropiedades, minimizar, CLAVES_FOTOS, NOMBRES_CAMPOS, lugarConMapa, linkMapa } from './vistas.js';
 
-const VERSION_APP = '1.13.0';
+const VERSION_APP = '1.15.0';
 const app = document.getElementById('app');
 const graph = crearGraph({ token: auth.token });
 
 let desbloqueada = false;
+// Atajo del icono (mantener pulsado): ./?accion=nota|entrada|inicio|fin → en el último expediente
+const ACCIONES = { nota: ['notaVoz', {}], entrada: ['nuevaEntrada', {}], inicio: ['nuevaEntrada', { tipo: 'inicio' }], fin: ['nuevaEntrada', { tipo: 'fin' }] };
+let accionPendiente = new URLSearchParams(location.search).get('accion');
+if (accionPendiente) history.replaceState(null, '', location.pathname);
 let ocultaDesde = 0;
 let alSincronizar = null;      // lo que hay que repintar cuando termina una subida
 let antesDeSalir = null;       // aviso si hay un borrador sin guardar
@@ -139,13 +143,34 @@ async function iniciar() {
       h('p', { class: 'sub' }, 'Ábrelo en js/config.js y sigue la GUIA.md, paso 2.')));
   }
   try {
-    if (await auth.procesarVuelta()) await kv.del('usuario');
+    if (await auth.procesarVuelta()) {
+      await kv.del('usuario');
+      if (!(await comprobarCuenta())) return; // otra cuenta: fuera
+    }
   } catch (e) {
     return pantallaEntrar(e.message);
   }
   if (!(await auth.hayCuenta())) return pantallaEntrar();
   if (!(await B.tienePin())) return pantallaPin({ crear: true });
   bloquear();
+}
+
+// ---- Uso privado: solo la cuenta de CONFIG.CUENTA_ID
+const mismaCuenta = (id) => !CONFIG.CUENTA_ID || String(id || '').toLowerCase() === String(CONFIG.CUENTA_ID).toLowerCase();
+async function comprobarCuenta() {
+  if (!CONFIG.CUENTA_ID) return true;
+  let yo;
+  try { yo = await graph.yo(); } catch { return true; } // sin conexión: se comprobará en otro momento
+  await kv.set('cuentaId', yo.id);
+  if (mismaCuenta(yo.id)) return true;
+  // Se descarta la sesión de esa otra cuenta (sus permisos no se guardan). Lo tuyo pendiente de subir no se toca.
+  await kv.del('sesion'); await kv.del('usuario'); await kv.del('cuentaId');
+  pantalla('Aletheia Campo', {}, h('div', { class: 'centro' },
+    h('img', { class: 'logo', src: 'icons/icono.svg', alt: '' }),
+    h('h2', {}, '🔒 App de uso privado'),
+    h('p', {}, 'Esta aplicación solo funciona con la cuenta de su titular.'),
+    h('button', { class: 'boton', onclick: () => location.replace(`https://login.microsoftonline.com/${CONFIG.TENANT}/oauth2/v2.0/logout?post_logout_redirect_uri=${encodeURIComponent(auth.urlRetorno())}`) }, 'Salir')));
+  return false;
 }
 
 function pantallaEntrar(error) {
@@ -231,11 +256,23 @@ document.addEventListener('visibilitychange', () => {
 
 async function trasDesbloquear() {
   desbloqueada = true;
+  if (CONFIG.CUENTA_ID && enLinea() && !(await comprobarCuenta())) { desbloqueada = false; return; }
   navigator.storage?.persist?.().catch(() => {}); // que Android no borre las entradas pendientes
   // Notas de voz que se quedaron «en edición» (p. ej. Android cerró la app en la cámara): ya se pueden subir
   for (const p of await pendientes.todos()) if (p.esperando) await pendientes.guardar({ ...p, esperando: false });
   const raiz = await kv.get('raiz');
-  ir(raiz ? 'directorio' : 'elegirRaiz', {}, { reemplazar: true });
+  // Si se entró por un atajo del icono: directo al último expediente y a la acción
+  // («atrás» lleva al expediente y luego a la lista, sin dibujar nada por medio)
+  const accion = ACCIONES[accionPendiente];
+  accionPendiente = null;
+  const ultimo = accion ? await kv.get('ultimoExpediente') : null;
+  if (raiz && accion && ultimo) {
+    history.replaceState({ vista: 'directorio', args: {} }, '');
+    history.pushState({ vista: 'expediente', args: { carpeta: ultimo } }, '');
+    ir(accion[0], { carpeta: ultimo, ...accion[1] });
+  } else {
+    ir(raiz ? 'directorio' : 'elegirRaiz', {}, { reemplazar: true });
+  }
   sincronizar();
 }
 
@@ -250,14 +287,29 @@ async function obtenerOps() {
     usuario = yo.displayName || yo.userPrincipalName || 'Usuario';
     await kv.set('usuario', usuario);
   }
-  return crearOperaciones(graph, { ordenador: CONFIG.ORDENADOR, usuario });
+  return crearOperaciones(graph, { ordenador: CONFIG.ORDENADOR, usuario }, {
+    progreso: (p, v, x) => { progresoSubida = { id: p.id, texto: `subiendo vídeo ${Math.round(x * 100)} %` }; },
+  });
 }
+
+let progresoSubida = null;
+const tieneVideoSinSubir = (p) => (p.videos || []).some((v) => !v.ruta);
+/** ¿Hay Wi-Fi? (o «no se sabe», o el detective permite subir vídeos con datos) */
+async function hayWifi() {
+  const soloWifi = (await kv.get('videosSoloWifi')) ?? true;
+  if (!soloWifi) return true;
+  const t = navigator.connection?.type;
+  return !t || t === 'wifi' || t === 'ethernet';
+}
+const tamañoTexto = (b) => (b >= 1024 * 1024 * 1024 ? (b / 1024 / 1024 / 1024).toFixed(1) + ' GB' : b >= 1024 * 1024 ? Math.round(b / 1024 / 1024) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB');
 
 async function sincronizar() {
   if (sincronizando || !enLinea() || !desbloqueada) return;
   sincronizando = true; // se marca ANTES de esperar nada: así nunca hay dos subidas a la vez
-  // Las notas de voz que el detective aún está completando (lugar, fotos) esperan a que pulse «Listo»
-  const lista = (await pendientes.todos()).filter((p) => !p.esperando).sort((a, b) => a.creado - b.creado);
+  // Las notas de voz que el detective aún está completando (lugar, fotos) esperan a que pulse «Listo».
+  // Las entradas con vídeo sin subir esperan al Wi-Fi (si así está configurado), salvo que se pida subir con datos.
+  const wifi = await hayWifi();
+  const lista = (await pendientes.todos()).filter((p) => !p.esperando && (wifi || p.conDatos || !tieneVideoSinSubir(p))).sort((a, b) => a.creado - b.creado);
   if (!lista.length) { sincronizando = false; return actualizarChip(); }
   actualizarChip();
   let subidas = 0;
@@ -279,12 +331,14 @@ async function sincronizar() {
   } catch (e) {
     if (e instanceof auth.SesionCaducada) ultimoErrorSesion = true;
   } finally {
+    progresoSubida = null;
     sincronizando = false;
     actualizarChip();
     if (alSincronizar) alSincronizar(subidas);
   }
 }
 addEventListener('online', () => { sincronizar(); actualizarChip(); });
+navigator.connection?.addEventListener?.('change', () => sincronizar()); // al pasar a Wi-Fi, suben los vídeos
 addEventListener('offline', actualizarChip);
 setInterval(sincronizar, 60000);
 
@@ -351,6 +405,9 @@ vistas.directorio = async () => {
   if (!raiz) return ir('elegirRaiz', {}, { reemplazar: true });
   const main = pantalla('Expedientes', { acciones: [chipPendientes(), h('button', { 'aria-label': 'Ajustes', onclick: () => ir('ajustes') }, '⚙')] });
   const buscar = h('input', { type: 'search', placeholder: 'Buscar por número, EDP o nombre…', autocomplete: 'off' });
+  const ultimo = await kv.get('ultimoExpediente');
+  if (ultimo) main.append(h('button', { class: 'boton sec ancho ultimo-exp', onclick: () => ir('expediente', { carpeta: ultimo }) },
+    '↩ Último: ', h('strong', {}, ultimo.numero), ' · ', ultimo.investigado || ultimo.edp));
   const lista = h('ul', { class: 'lista' });
   main.append(buscar, lista);
   let datos = (await cache.get('directorio')) || null;
@@ -389,6 +446,7 @@ vistas.directorio = async () => {
 const PESTANAS = [['historial', 'Historial'], ['datos', 'Datos'], ['vehiculos', 'Vehículos'], ['propiedades', 'Propiedades'], ['fotos', 'Fotos'], ['pdf', 'PDF']];
 
 vistas.expediente = async ({ carpeta, pestana = 'historial' }) => {
+  kv.set('ultimoExpediente', carpeta); // para los atajos del icono y el acceso rápido del directorio
   const main = pantalla(`${carpeta.numero} · ${carpeta.investigado || carpeta.edp}`, { atras: true, acciones: [
     chipPendientes(),
     h('button', { 'aria-label': 'Actualizar', title: 'Volver a leer la ficha de OneDrive', onclick: () => { estado(main, enLinea() ? 'Leyendo la ficha de OneDrive…' : '', ''); cargar(); } }, '↻')] });
@@ -419,10 +477,19 @@ vistas.expediente = async ({ carpeta, pestana = 'historial' }) => {
     barraPend.hidden = !mias.length;
     if (!mias.length) return;
     const conError = mias.find((p) => p.error);
+    const esperandoWifi = !(await hayWifi()) ? mias.filter((p) => tieneVideoSinSubir(p) && !p.conDatos) : [];
+    const prog = progresoSubida && mias.some((p) => p.id === progresoSubida.id) ? progresoSubida.texto : '';
     barraPend.replaceChildren(...[
       h('span', {}, `⏳ ${mias.length} ${mias.length === 1 ? 'pendiente' : 'pendientes'} · `),
-      sincronizando ? h('span', {}, 'subiendo…') :
+      sincronizando && esperandoWifi.length < mias.length ? h('span', {}, 'subiendo…') :
         h('button', { class: 'enlace', type: 'button', onclick: () => { if (!enLinea()) { barraPend.querySelector('.ultimo')?.remove(); barraPend.append(h('div', { class: 'ultimo' }, 'Sin conexión: se subirá sola cuando vuelva la cobertura.')); return; } sincronizar(); setTimeout(pintarBarra, 100); } }, 'Reintentar ahora'),
+      prog ? h('div', { class: 'ultimo' }, '🎬 ' + prog) : null,
+      esperandoWifi.length ? h('div', { class: 'ultimo' }, `🎬 ${esperandoWifi.length === 1 ? 'Una entrada con vídeo espera' : esperandoWifi.length + ' entradas con vídeo esperan'} al Wi-Fi. `,
+        h('button', { class: 'enlace', type: 'button', onclick: async () => {
+          if (!confirm('¿Subir ahora los vídeos con datos móviles? Pueden ocupar mucho.')) return;
+          for (const p of esperandoWifi) await pendientes.guardar({ ...p, conDatos: true });
+          sincronizar(); setTimeout(pintarBarra, 200);
+        } }, 'Subir ahora con datos')) : null,
       conError ? h('div', { class: 'ultimo' }, 'Último aviso: ' + conError.error) : null].filter(Boolean));
   };
   pintarBarra();
@@ -564,6 +631,7 @@ async function vistaHistorial(carpeta, valores) {
       if (p.audio.blob) t.append(h('audio', { controls: true, preload: 'metadata', src: URL.createObjectURL(p.audio.blob), class: 'audio' }));
       else if (p.audio.ruta) t.append(reproductorAudio(carpeta, p.audio.ruta));
     }
+    for (const v of (p.videos || []).filter((x) => x.blob)) t.append(h('video', { controls: true, preload: 'metadata', src: URL.createObjectURL(v.blob), class: 'video' }), h('div', { class: 'sub' }, `🎬 ${v.nombre} · ${tamañoTexto(v.blob.size)}${tieneVideoSinSubir(p) && !p.conDatos ? ' · se subirá con Wi-Fi' : ''}`));
     const locales = p.fotos.filter((f) => f.blob);
     if (locales.length) t.append(h('div', { class: 'rejilla' }, locales.map((f) => {
       const url = URL.createObjectURL(f.blob);
@@ -575,10 +643,25 @@ async function vistaHistorial(carpeta, valores) {
     const t = tarjeta(e);
     if (e.AUDIO) t.append(etiquetaAudio('subido'), reproductorAudio(carpeta, e.AUDIO, pend));
     if (Array.isArray(e.FOTOS) && e.FOTOS.length) t.append(rejillaFotos(carpeta, e.FOTOS));
+    if (Array.isArray(e.VIDEOS) && e.VIDEOS.length) t.append(...e.VIDEOS.map((v) => botonVideo(carpeta, v)));
     out.push(t);
   }
   if (!pend.length && !hist.length) out.push(h('p', { class: 'vacio' }, valores ? 'El historial está vacío.' : 'Historial no disponible todavía.'));
   return out;
+}
+
+/** Un vídeo ya subido: se abre con el reproductor de OneDrive (no se descarga entero al móvil) */
+function botonVideo(carpeta, v) {
+  const nombre = String(v?.ruta || '').split('/').pop();
+  const b = h('button', { class: 'boton sec', type: 'button', onclick: async () => {
+    if (!enLinea()) { b.textContent = 'Sin conexión para ver el vídeo'; return; }
+    try {
+      const it = await graph.itemPorRuta(carpeta.driveId, carpeta.id, L.rutaRelativaLimpia(v.ruta));
+      if (!it) { b.textContent = 'El vídeo no está en OneDrive'; return; }
+      window.open(it.webUrl, '_blank', 'noopener');
+    } catch (e) { b.textContent = 'No se pudo abrir: ' + e.message; }
+  } }, `🎬 Ver vídeo (${nombre})`);
+  return h('div', { class: 'video-subido' }, b, v.pie ? h('div', { class: 'sub' }, v.pie) : null);
 }
 
 const duracionTexto = (seg) => { const s = Math.round(Number(seg) || 0); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
@@ -691,6 +774,17 @@ async function direccionDe(la, lo) {
 }
 
 /** Cuándo (y dónde) se hizo una foto: EXIF del JPEG o, si no, la fecha del nombre del archivo. */
+/** Cuándo se grabó un vídeo: fecha interna del MP4/MOV (principio o final del archivo) o la del nombre. */
+async function datosDeVideo(file) {
+  let fecha = null;
+  try {
+    const cab = await file.slice(0, 512 * 1024).arrayBuffer();
+    const fin = file.size > 512 * 1024 ? await file.slice(Math.max(0, file.size - 4 * 1024 * 1024)).arrayBuffer() : null;
+    fecha = L.leerFechaMp4(cab, fin);
+  } catch { /* nada */ }
+  return { fecha: fecha || L.fechaDeNombre(file.name), gps: null };
+}
+
 async function datosDeFoto(file) {
   let r = { fecha: null, gps: null };
   try { if (/jpe?g/i.test(file.type) || /\.jpe?g$/i.test(file.name || '')) r = L.leerExif(await file.slice(0, 256 * 1024).arrayBuffer()); } catch { /* nada */ }
@@ -727,6 +821,25 @@ vistas.nuevaEntrada = async ({ carpeta, tipo }) => {
   const textoInicial = texto.value;
   const rejilla = h('div', { class: 'rejilla grande' });
   const camara = h('input', { type: 'file', accept: 'image/*', capture: 'environment', hidden: true });
+  const entradaVideo = h('input', { type: 'file', accept: 'video/*', multiple: true, hidden: true });
+  const videos = [];
+  const listaVideos = h('div', { class: 'lista-videos' });
+  const pintarVideos = () => listaVideos.replaceChildren(...videos.map((v, i) => h('div', { class: 'video-item' },
+    h('video', { src: v.url, controls: true, preload: 'metadata', class: 'video' }),
+    h('div', { class: 'sub' }, `${v.marca ? '🎥' : '🎬'} ${v.nombre} · ${tamañoTexto(v.blob.size)}${v.marca ? ' · con marca de tiempo' : ''}`),
+    h('div', { class: 'fila-video' },
+      h('input', { placeholder: 'Pie (opcional)', value: v.pie, oninput: (e) => { v.pie = e.target.value; } }),
+      h('button', { class: 'boton sec', type: 'button', onclick: () => { URL.revokeObjectURL(v.url); videos.splice(i, 1); pintarVideos(); } }, '✕')))));
+  entradaVideo.addEventListener('change', () => {
+    for (const file of entradaVideo.files) {
+      const ext = (file.name.match(/\.(\w{2,5})$/) || [, (file.type.split('/')[1] || 'mp4')])[1].toLowerCase();
+      const v = { nombre: L.nombreFotoMovil(new Date()).replace(/\.jpg$/, '.' + ext), blob: file, pie: '', url: URL.createObjectURL(file), esVideo: true };
+      videos.push(v);
+      datosDeVideo(file).then((dato) => { v.dato = dato; pintarSugerencia(); });
+    }
+    entradaVideo.value = '';
+    pintarVideos();
+  });
   const galeria = h('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true });
   const guardar = h('button', { class: 'boton ancho' }, 'Guardar entrada');
 
@@ -765,7 +878,7 @@ vistas.nuevaEntrada = async ({ carpeta, tipo }) => {
   // Si la foto se hizo en otro momento (galería, dash cam…), ofrecer su hora (y su lugar, si lo trae)
   const sugerenciaFoto = h('div', { class: 'sugerencia-foto', hidden: true });
   function pintarSugerencia() {
-    const conFecha = fotos.filter((f) => f.dato?.fecha).sort((a, b) => a.dato.fecha - b.dato.fecha);
+    const conFecha = [...fotos, ...videos].filter((f) => f.dato?.fecha && !f.marca).sort((a, b) => a.dato.fecha - b.dato.fecha);
     const f = conFecha[0];
     const [d, m, a] = fecha.value.split('/').map(Number), [hh, mm] = hora.value.split(':').map(Number);
     const actual = new Date(a, (m || 1) - 1, d || 1, hh || 0, mm || 0);
@@ -774,7 +887,7 @@ vistas.nuevaEntrada = async ({ carpeta, tipo }) => {
     const F = L.fechaES(f.dato.fecha), H = L.horaES(f.dato.fecha), g = f.dato.gps;
     sugerenciaFoto.hidden = false;
     sugerenciaFoto.replaceChildren(
-      h('div', {}, `📷 La foto se hizo el ${F} a las ${H}`, g ? ' y trae su posición GPS.' : '.'),
+      h('div', {}, f.esVideo ? `🎬 El vídeo se grabó el ${F} a las ${H}` : `📷 La foto se hizo el ${F} a las ${H}`, g ? ' y trae su posición GPS.' : '.'),
       h('button', { class: 'boton sec', type: 'button', onclick: async () => {
         fecha.value = F; hora.value = H;
         if (g) {
@@ -785,14 +898,14 @@ vistas.nuevaEntrada = async ({ carpeta, tipo }) => {
           notaGps.replaceChildren('⚠ Ojo: el GPS es el de ahora, no el de la foto. ', h('button', { type: 'button', class: 'enlace', onclick: () => { gpsActual = null; notaGps.textContent = 'Sin coordenadas GPS en esta entrada.'; } }, 'Quitar GPS'));
         }
         sugerenciaFoto.hidden = true;
-      } }, g ? 'Usar la hora y el lugar de la foto' : 'Usar la hora de la foto'));
+      } }, g ? 'Usar la hora y el lugar de la foto' : f.esVideo ? 'Usar la hora del vídeo' : 'Usar la hora de la foto'));
   }
   fecha.addEventListener('input', pintarSugerencia);
   hora.addEventListener('input', pintarSugerencia);
   camara.addEventListener('change', () => { añadir(camara.files); camara.value = ''; });
   galeria.addEventListener('change', () => { añadir(galeria.files); galeria.value = ''; });
 
-  antesDeSalir = () => ((texto.value.trim() === textoInicial.trim() || !texto.value.trim()) && !fotos.length && !km.value.trim()) || confirm('¿Salir sin guardar esta entrada?');
+  antesDeSalir = () => ((texto.value.trim() === textoInicial.trim() || !texto.value.trim()) && !fotos.length && !videos.length && !km.value.trim()) || confirm('¿Salir sin guardar esta entrada?');
 
   // Guardar (conKm = false → botón «Saltar»: se guarda sin km)
   const guardarEntrada = async (conKm = true) => {
@@ -802,8 +915,15 @@ vistas.nuevaEntrada = async ({ carpeta, tipo }) => {
     const k = conKm ? L.limpiarKM(km.value) : { km: '' };
     if (k.error) { km.focus(); return estado(main, k.error, 'error'); }
     // Basta con texto, con una foto o con los km (ya no hace falta poner un punto)
-    if (!texto.value.trim() && !fotos.length && !k.km) return estado(main, 'Escribe una descripción o añade una foto.', 'error');
+    if (!texto.value.trim() && !fotos.length && !videos.length && !k.km) return estado(main, 'Escribe una descripción o añade una foto.', 'error');
     guardar.disabled = true;
+    // Huella digital de cada foto y vídeo, aquí, en el móvil, antes de subir nada
+    const total = [...fotos, ...videos].reduce((s, f) => s + f.blob.size, 0) || 1;
+    let hecho = 0;
+    for (const f of [...fotos, ...videos]) {
+      if (!f.sha256) f.sha256 = await L.huellaSha256(f.blob, (x) => estado(main, `Calculando la huella digital… ${Math.round(((hecho + x * f.blob.size) / total) * 100)} %`, ''));
+      hecho += f.blob.size;
+    }
     const cacheFicha = await cache.get('ficha:' + carpeta.id);
     await pendientes.guardar({
       id: crypto.randomUUID(), creado: Date.now(), fase: 'fotos',
@@ -811,9 +931,11 @@ vistas.nuevaEntrada = async ({ carpeta, tipo }) => {
       fichaId: cacheFicha?.fichaId || null,
       expNumero: String(cacheFicha?.obj?.valores?.EXP_NUMERO ?? '').trim() || null,
       entrada: { FECHA: F, HORA: Hh, LUGAR: lugar.value.trim(), ...(gpsActual ? { GPS: gpsActual } : {}), TEXTO: texto.value.trim(), ...(k.km ? { KM: k.km } : {}), ...(rapida?.trayecto ? { TRAYECTO: rapida.trayecto } : {}) },
-      fotos: fotos.map((f) => ({ nombre: f.nombre, blob: f.blob, pie: f.pie.trim() })),
+      fotos: fotos.map((f) => ({ nombre: f.nombre, blob: f.blob, pie: f.pie.trim(), sha256: f.sha256 })),
+      videos: videos.map((v) => ({ nombre: v.nombre, blob: v.blob, pie: v.pie.trim(), sha256: v.sha256, ...(v.marca ? { marca: true } : {}) })),
     });
     fotos.forEach((f) => URL.revokeObjectURL(f.url));
+    videos.forEach((v) => URL.revokeObjectURL(v.url));
     antesDeSalir = null;
     history.back();
     setTimeout(sincronizar, 300);
@@ -851,13 +973,109 @@ vistas.nuevaEntrada = async ({ carpeta, tipo }) => {
     h('label', {}, 'Fotos'),
     h('div', { class: 'botones' },
       h('button', { class: 'boton sec', type: 'button', onclick: () => camara.click() }, '📷 Cámara'),
-      h('button', { class: 'boton sec', type: 'button', onclick: () => galeria.click() }, '🖼 Galería')),
-    camara, galeria, rejilla, sugerenciaFoto, h('p'),
+      h('button', { class: 'boton sec', type: 'button', onclick: () => galeria.click() }, '🖼 Galería'),
+      h('button', { class: 'boton sec', type: 'button', onclick: () => entradaVideo.click() }, '🎬 Vídeo'),
+      h('button', { class: 'boton sec', type: 'button', onclick: async () => {
+        const r = await grabarConMarca(carpeta);
+        if (!r) return;
+        videos.push({ nombre: L.nombreFotoMovil(r.inicio).replace(/\.jpg$/, '_marca.' + r.ext), blob: r.blob, pie: '', url: URL.createObjectURL(r.blob), esVideo: true, marca: true });
+        pintarVideos();
+      } }, '🎥 Vídeo con marca')),
+    camara, galeria, entradaVideo, rejilla, sugerenciaFoto, listaVideos, h('p'),
     guardar,
     h('p', { class: 'sub' }, enLinea() ? 'Se subirá a OneDrive al guardar.' : 'Sin conexión: se guarda en el móvil y se subirá sola cuando vuelva la cobertura.'));
   gps();
   if (rapida) setTimeout(() => km.focus(), 50); // abre el teclado de números
 };
+
+// ---------------------------------------------------------------- vídeo con marca de tiempo
+// Graba con la cámara del móvil y escribe en cada fotograma la fecha, la hora (con segundos),
+// el expediente y el GPS. La marca nace con el vídeo: el original ya la lleva y su huella la cubre.
+// Solo graba con la pantalla delante; si la app pasa a segundo plano, se para y se guarda lo grabado.
+const MAX_SEGUNDOS_VIDEO = 30 * 60;
+function grabarConMarca(carpeta) {
+  return new Promise(async (resolver) => {
+    let flujo = null, grabador = null, wake = null, anim = 0, reloj = 0, gpsWatch = null, gpsTxt = '', partes = [], inicio = null, cerrado = false;
+    const video = h('video', { muted: true, playsInline: true, autoplay: true });
+    const lienzo = h('canvas', { class: 'lienzo-marca' });
+    const tiempo = h('span', { class: 'tiempo' }, '0:00');
+    const aviso = h('div', { class: 'sub' }, 'Preparando la cámara…');
+    const boton = h('button', { class: 'boton peligro grande', type: 'button', disabled: true }, '● Grabar');
+    const cancelar = h('button', { class: 'boton sec', type: 'button' }, 'Cancelar');
+    video.className = 'video-fuente';
+    const capa = h('div', { class: 'capa-grabadora' }, video, lienzo, h('div', { class: 'controles-grabadora' }, h('div', { class: 'grabando-indicador pequeño' }, h('span', { class: 'punto' }), tiempo), aviso, h('div', { class: 'botones' }, boton, cancelar)));
+    document.body.append(capa);
+    const ctx = lienzo.getContext('2d');
+    const dos = (n) => String(n).padStart(2, '0');
+    const exp = `Exp. ${carpeta.numero}${carpeta.edp ? ' · ' + carpeta.edp : ''}`;
+    const terminar = (resultado) => {
+      if (cerrado) return; cerrado = true;
+      cancelAnimationFrame(anim); clearInterval(reloj);
+      if (gpsWatch != null) navigator.geolocation.clearWatch(gpsWatch);
+      flujo?.getTracks().forEach((t) => t.stop());
+      wake?.release?.().catch(() => {});
+      document.removeEventListener('visibilitychange', alOcultar);
+      capa.remove();
+      resolver(resultado);
+    };
+    const parar = () => { if (grabador?.state === 'recording') { boton.disabled = true; aviso.textContent = 'Guardando…'; grabador.stop(); } };
+    const alOcultar = () => { if (document.hidden) { if (grabador?.state === 'recording') parar(); else terminar(null); } };
+    cancelar.onclick = () => { if (grabador?.state === 'recording') { grabador.onstop = () => terminar(null); grabador.stop(); } else terminar(null); };
+    try {
+      flujo = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: true });
+    } catch (e) {
+      aviso.textContent = e.name === 'NotAllowedError' ? 'Sin permiso para la cámara o el micrófono. Actívalo en los ajustes de Chrome.' : 'No se pudo usar la cámara: ' + e.message;
+      cancelar.textContent = 'Cerrar';
+      return;
+    }
+    video.srcObject = flujo;
+    await new Promise((ok) => { if (video.readyState >= 1) ok(); else video.onloadedmetadata = ok; });
+    await video.play().catch(() => {});
+    lienzo.width = video.videoWidth || 1280; lienzo.height = video.videoHeight || 720;
+    gpsWatch = navigator.geolocation?.watchPosition((p) => { gpsTxt = 'GPS ' + L.formatoGPS(p.coords.latitude, p.coords.longitude); }, () => {}, { enableHighAccuracy: true, maximumAge: 5000 });
+    // Cada fotograma: la imagen de la cámara + una franja con la marca de tiempo
+    const pintar = () => {
+      const W = lienzo.width, H = lienzo.height, d = new Date();
+      ctx.drawImage(video, 0, 0, W, H);
+      const t = Math.max(14, Math.round(Math.min(W, H) * 0.04));
+      const lineas = [`${dos(d.getDate())}/${dos(d.getMonth() + 1)}/${d.getFullYear()}  ${dos(d.getHours())}:${dos(d.getMinutes())}:${dos(d.getSeconds())}`, [exp, gpsTxt].filter(Boolean).join('  ·  ')];
+      const alto = t * 1.35 * lineas.length + t * 0.6;
+      ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, H - alto, W, alto);
+      ctx.fillStyle = '#ffffff'; ctx.font = `600 ${t}px system-ui, sans-serif`; ctx.textBaseline = 'top';
+      lineas.forEach((l, i) => ctx.fillText(l, t * 0.5, H - alto + t * 0.3 + i * t * 1.35, W - t));
+      anim = requestAnimationFrame(pintar);
+    };
+    pintar();
+    document.addEventListener('visibilitychange', alOcultar);
+    const tipos = ['video/mp4;codecs=avc1.42E01F,mp4a.40.2', 'video/mp4;codecs=avc1,mp4a', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
+    const tipo = tipos.find((x) => window.MediaRecorder?.isTypeSupported?.(x)) || '';
+    aviso.textContent = 'La marca de tiempo queda grabada en la imagen.';
+    boton.disabled = false;
+    boton.onclick = async () => {
+      if (grabador?.state === 'recording') return parar();
+      const salida = lienzo.captureStream(30);
+      flujo.getAudioTracks().forEach((a) => salida.addTrack(a));
+      grabador = new MediaRecorder(salida, { ...(tipo ? { mimeType: tipo } : {}), videoBitsPerSecond: lienzo.width * lienzo.height >= 1920 * 1080 ? 6000000 : 3500000 });
+      grabador.ondataavailable = (e) => { if (e.data?.size) partes.push(e.data); };
+      grabador.onstop = () => {
+        const mime = (grabador.mimeType || tipo || 'video/webm').split(';')[0];
+        const blob = new Blob(partes, { type: mime });
+        terminar(blob.size ? { blob, ext: /mp4/.test(mime) ? 'mp4' : 'webm', inicio } : null);
+      };
+      inicio = new Date();
+      grabador.start(1000);
+      try { wake = await navigator.wakeLock?.request('screen'); } catch { /* nada */ }
+      capa.classList.add('grabando');
+      boton.textContent = '■ Parar y guardar';
+      aviso.textContent = 'Grabando con marca de tiempo…';
+      reloj = setInterval(() => {
+        const s = Math.floor((Date.now() - inicio) / 1000);
+        tiempo.textContent = `${Math.floor(s / 60)}:${dos(s % 60)}`;
+        if (s >= MAX_SEGUNDOS_VIDEO) parar();
+      }, 250);
+    };
+  });
+}
 
 // ---------------------------------------------------------------- nota de voz
 // Graba SOLO mientras esta pantalla está delante y el detective no pulsa «Parar».
@@ -904,7 +1122,8 @@ vistas.notaVoz = async ({ carpeta }) => {
     if (!registro) return;
     registro.entrada.LUGAR = lugar.value.trim();
     if (gpsActual) registro.entrada.GPS = gpsActual; else delete registro.entrada.GPS;
-    registro.fotos = fotos.map((f) => ({ nombre: f.nombre, blob: f.blob, pie: (f.pie || '').trim() }));
+    for (const f of fotos) if (!f.sha256) f.sha256 = await L.huellaSha256(f.blob);
+    registro.fotos = fotos.map((f) => ({ nombre: f.nombre, blob: f.blob, pie: (f.pie || '').trim(), sha256: f.sha256 }));
     await pendientes.guardar(registro);
   }
 
@@ -930,7 +1149,7 @@ vistas.notaVoz = async ({ carpeta }) => {
       fichaId: cacheFicha?.fichaId || null,
       expNumero: String(cacheFicha?.obj?.valores?.EXP_NUMERO ?? '').trim() || null,
       entrada: { FECHA: L.fechaES(inicio), HORA: L.horaES(inicio), LUGAR: '', TEXTO: '' },
-      audio: { nombre: L.nombreNotaVoz(inicio, L.extensionAudio(mime, formato.ext)), blob, duracion },
+      audio: { nombre: L.nombreNotaVoz(inicio, L.extensionAudio(mime, formato.ext)), blob, duracion, sha256: await L.huellaSha256(blob) },
       fotos: [],
     };
     await guardarCambios(); // ya está a salvo en el móvil
@@ -1047,6 +1266,7 @@ vistas.ajustes = async () => {
 
   main.append(
     h('section', { class: 'tarjeta' }, h('h3', {}, 'Cuenta'), h('p', {}, usuario)),
+    tarjetaUsoPrivado(),
     h('section', { class: 'tarjeta' }, h('h3', {}, 'Carpeta de expedientes'),
       h('p', {}, raiz?.ruta || raiz?.name || '—'),
       h('button', { class: 'boton sec', onclick: () => ir('elegirRaiz') }, 'Cambiar carpeta')),
@@ -1056,6 +1276,9 @@ vistas.ajustes = async () => {
     h('section', { class: 'tarjeta' }, h('h3', {}, 'Seguridad'),
       h('div', { class: 'botones' }, h('button', { class: 'boton sec', onclick: () => ir('cambiarPin') }, 'Cambiar PIN')),
       huellaPosible ? interruptor('Abrir con huella', conHuella, (v) => (v ? B.activarHuella() : B.desactivarHuella())) : h('p', { class: 'sub' }, 'Este móvil no permite huella en apps web.')),
+    h('section', { class: 'tarjeta' }, h('h3', {}, 'Vídeos'),
+      interruptor('Subir vídeos solo con Wi-Fi', (await kv.get('videosSoloWifi')) ?? true, (v) => kv.set('videosSoloWifi', v),
+        'Las entradas con vídeo esperan al Wi-Fi para no gastar datos. Desde el expediente puedes pedir «Subir ahora con datos».')),
     h('section', { class: 'tarjeta' }, h('h3', {}, 'Ubicación'),
       interruptor('Convertir GPS en dirección', dirAuto, (v) => kv.set('direccionAuto', v),
         'Usa OpenStreetMap: se envían solo las coordenadas, sin ningún dato del expediente. Las coordenadas se guardan siempre aparte (dato GPS); si lo desactivas, tú escribes el lugar.')),
@@ -1065,6 +1288,20 @@ vistas.ajustes = async () => {
     h('p', { class: 'sub centro' }, `Aletheia Campo ${VERSION_APP}`));
 };
 vistas.cambiarPin = () => pantallaPin({ cambiar: true });
+
+function tarjetaUsoPrivado() {
+  const caja = h('section', { class: 'tarjeta' }, h('h3', {}, 'Uso privado'));
+  if (CONFIG.CUENTA_ID) { caja.append(h('p', {}, '🔒 Activado: la app solo funciona con tu cuenta de Microsoft.')); return caja; }
+  const p = h('p', { class: 'sub' }, enLinea() ? 'Leyendo el código de tu cuenta…' : 'Hace falta conexión para ver el código de tu cuenta.');
+  caja.append(h('p', {}, 'Para que la app rechace cualquier otra cuenta, copia este código y pégalo en GitHub, en js/config.js, en la línea CUENTA_ID (entre las comillas).'), p);
+  if (enLinea()) graph.yo().then((yo) => {
+    p.replaceChildren(h('code', { class: 'codigo-cuenta' }, yo.id), ' ',
+      h('button', { class: 'boton sec', type: 'button', onclick: async (ev) => {
+        try { await navigator.clipboard.writeText(yo.id); ev.target.textContent = '✓ Copiado'; } catch { ev.target.textContent = 'Cópialo a mano'; }
+      } }, 'Copiar'));
+  }).catch(() => { p.textContent = 'No se pudo leer el código ahora.'; });
+  return caja;
+}
 
 async function cerrarSesion() {
   const n = await pendientes.contar();
