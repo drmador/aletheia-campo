@@ -10,7 +10,7 @@ import * as L from './logica.js';
 import * as B from './bloqueo.js';
 import { h, vistaDatos, vistaVehiculos, vistaPropiedades, minimizar, CLAVES_FOTOS, NOMBRES_CAMPOS, lugarConMapa, linkMapa } from './vistas.js';
 
-const VERSION_APP = '1.17.0';
+const VERSION_APP = '1.17.1';
 const app = document.getElementById('app');
 const graph = crearGraph({ token: auth.token });
 
@@ -1085,16 +1085,24 @@ function grabarConMarca(carpeta) {
       botonCamara.onclick = async () => {
         botonCamara.disabled = true;
         const sig = (i + 1) % camaras.length;
-        try {
-          const nuevo = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: camaras[sig].deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
+        // Android no deja abrir dos cámaras a la vez: primero se cierra la actual y luego se abre la otra.
+        const abrir = async (n) => {
+          const nuevo = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: camaras[n].deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
           const pista = nuevo.getVideoTracks()[0];
-          flujo.removeTrack(pistaVideo); pistaVideo.stop();
-          flujo.addTrack(pista); pistaVideo = pista; i = sig;
+          flujo.addTrack(pista); pistaVideo = pista; i = n;
           video.srcObject = new MediaStream([pista]);
           await video.play().catch(() => {});
           botonCamara.textContent = `🔄 Cámara ${i + 1}/${camaras.length}`;
           prepararZoom();
-        } catch (e) { aviso.textContent = 'No se pudo cambiar de cámara: ' + e.message; }
+        };
+        const anterior = i;
+        flujo.removeTrack(pistaVideo); pistaVideo.stop();
+        await new Promise((ok) => setTimeout(ok, 150));
+        try { await abrir(sig); }
+        catch (e) {
+          aviso.textContent = 'Esta cámara no se puede usar desde la app. Sigue con la anterior.';
+          try { await abrir(anterior); } catch (e2) { aviso.textContent = 'No se pudo volver a abrir la cámara: ' + e2.message; }
+        }
         botonCamara.disabled = false;
       };
     }
