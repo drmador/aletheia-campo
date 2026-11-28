@@ -249,3 +249,9 @@ video.video { width: 100%; max-height: 260px; border-radius: 10px; background: #
 .otras-carpetas{margin:1rem 0;font-size:.9rem;opacity:.85}
 .otras-carpetas summary{cursor:pointer;padding:.5rem 0}
 .otras-carpetas ul{padding-left:1.2rem}
+.fila-zoom { display: flex; align-items: center; gap: 10px; margin: 4px 0 8px; }
+.fila-zoom[hidden] { display: none; }
+.zoom-camara { flex: 1; accent-color: #e0e6f0; }
+.zoom-valor { min-width: 3.2em; text-align: right; font-variant-numeric: tabular-nums; }
+.marco-lienzo { touch-action: none; }
+.capa-grabadora .botones .cambiar-camara { flex: 0 0 auto; }

@@ -10,7 +10,7 @@ import * as L from './logica.js';
 import * as B from './bloqueo.js';
 import { h, vistaDatos, vistaVehiculos, vistaPropiedades, minimizar, CLAVES_FOTOS, NOMBRES_CAMPOS, lugarConMapa, linkMapa } from './vistas.js';
 
-const VERSION_APP = '1.16.1';
+const VERSION_APP = '1.17.0';
 const app = document.getElementById('app');
 const graph = crearGraph({ token: auth.token });
 
@@ -1011,7 +1011,12 @@ function grabarConMarca(carpeta) {
     const cancelar = h('button', { class: 'boton sec', type: 'button' }, 'Cancelar');
     video.className = 'video-fuente';
     const marco = h('div', { class: 'marco-lienzo' }, lienzo);
-    const capa = h('div', { class: 'capa-grabadora' }, video, marco, h('div', { class: 'controles-grabadora' }, h('div', { class: 'grabando-indicador pequeño' }, h('span', { class: 'punto' }), tiempo), aviso, h('div', { class: 'botones' }, boton, cancelar)));
+    // Zoom y cambio de cámara (solo aparecen si el móvil los ofrece al navegador)
+    const zoom = h('input', { type: 'range', class: 'zoom-camara', 'aria-label': 'Zoom' });
+    const zoomTxt = h('span', { class: 'zoom-valor' }, '1×');
+    const filaZoom = h('div', { class: 'fila-zoom', hidden: true }, h('span', {}, '🔍'), zoom, zoomTxt);
+    const botonCamara = h('button', { class: 'boton sec cambiar-camara', type: 'button', hidden: true }, '🔄 Cámara');
+    const capa = h('div', { class: 'capa-grabadora' }, video, marco, h('div', { class: 'controles-grabadora' }, h('div', { class: 'grabando-indicador pequeño' }, h('span', { class: 'punto' }), tiempo), filaZoom, aviso, h('div', { class: 'botones' }, boton, botonCamara, cancelar)));
     document.body.append(capa);
     const ctx = lienzo.getContext('2d');
     const dos = (n) => String(n).padStart(2, '0');
@@ -1037,9 +1042,62 @@ function grabarConMarca(carpeta) {
       cancelar.textContent = 'Cerrar';
       return;
     }
-    video.srcObject = flujo;
+    video.srcObject = new MediaStream(flujo.getVideoTracks());
     await new Promise((ok) => { if (video.readyState >= 1) ok(); else video.onloadedmetadata = ok; });
     await video.play().catch(() => {});
+
+    // --- Zoom: el que deja usar el móvil en la cámara actual (deslizador o pellizco con dos dedos)
+    let pistaVideo = flujo.getVideoTracks()[0];
+    const prepararZoom = () => {
+      const caps = pistaVideo.getCapabilities?.() || {};
+      if (!caps.zoom || !(caps.zoom.max > caps.zoom.min)) { filaZoom.hidden = true; return; }
+      Object.assign(zoom, { min: caps.zoom.min, max: caps.zoom.max, step: caps.zoom.step || 0.1 });
+      zoom.value = pistaVideo.getSettings?.().zoom ?? caps.zoom.min;
+      zoomTxt.textContent = `${Number(zoom.value).toFixed(1)}×`;
+      filaZoom.hidden = false;
+    };
+    let zoomPendiente = null, aplicando = false;
+    const ponerZoom = async (v) => {
+      v = Math.min(Number(zoom.max), Math.max(Number(zoom.min), v));
+      zoom.value = v; zoomTxt.textContent = `${v.toFixed(1)}×`;
+      zoomPendiente = v; if (aplicando) return;
+      aplicando = true;
+      while (zoomPendiente != null) { const z = zoomPendiente; zoomPendiente = null; await pistaVideo.applyConstraints({ advanced: [{ zoom: z }] }).catch(() => {}); }
+      aplicando = false;
+    };
+    zoom.addEventListener('input', () => ponerZoom(Number(zoom.value)));
+    let pellizco = null;
+    const distancia = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    marco.addEventListener('touchstart', (e) => { if (e.touches.length === 2 && !filaZoom.hidden) pellizco = { d: distancia(e.touches), z: Number(zoom.value) }; }, { passive: true });
+    marco.addEventListener('touchmove', (e) => { if (pellizco && e.touches.length === 2) { e.preventDefault(); ponerZoom(pellizco.z * distancia(e.touches) / pellizco.d); } }, { passive: false });
+    marco.addEventListener('touchend', () => { pellizco = null; });
+    prepararZoom();
+
+    // --- Cambiar entre las cámaras traseras que el móvil deja ver al navegador (gran angular, tele…)
+    let camaras = [];
+    try {
+      camaras = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput' && !/front|frontal|delantera|user/i.test(d.label));
+    } catch { /* nada */ }
+    if (camaras.length > 1) {
+      botonCamara.hidden = false;
+      let i = Math.max(0, camaras.findIndex((c) => c.deviceId === pistaVideo.getSettings?.().deviceId));
+      botonCamara.textContent = `🔄 Cámara ${i + 1}/${camaras.length}`;
+      botonCamara.onclick = async () => {
+        botonCamara.disabled = true;
+        const sig = (i + 1) % camaras.length;
+        try {
+          const nuevo = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: camaras[sig].deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
+          const pista = nuevo.getVideoTracks()[0];
+          flujo.removeTrack(pistaVideo); pistaVideo.stop();
+          flujo.addTrack(pista); pistaVideo = pista; i = sig;
+          video.srcObject = new MediaStream([pista]);
+          await video.play().catch(() => {});
+          botonCamara.textContent = `🔄 Cámara ${i + 1}/${camaras.length}`;
+          prepararZoom();
+        } catch (e) { aviso.textContent = 'No se pudo cambiar de cámara: ' + e.message; }
+        botonCamara.disabled = false;
+      };
+    }
     // Orientación real del móvil (la app está fija en vertical): se mira la gravedad.
     // fisico = 0 vertical, 90 girado a la izquierda, 180 boca abajo, 270 girado a la derecha.
     // Antes de grabar sigue al móvil; al pulsar «Grabar» se queda fija para todo el vídeo, como en la cámara normal.
